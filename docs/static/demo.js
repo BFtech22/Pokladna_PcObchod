@@ -8,7 +8,7 @@
   'use strict';
 
   const KLIC = 'pokladna.demo.db';
-  const VERZE = 3;
+  const VERZE = 4;
   window.POKLADNA_DEMO = true;
 
   const ZBOZI = [
@@ -67,8 +67,9 @@
         { id: 2, jmeno: 'Prodavač (demo)', pin: '1111', role: 'PRODAVAC', aktivni: 1, vytvoreno: ted() },
       ],
       zbozi: [], eany: {}, prodeje: [], polozky: [], prijemky: [], prijemka_polozky: [], pohyby: [], dodavatel_kody: {},
-      odberatele: [], faktury: [], faktura_polozky: [],
+      odberatele: [], faktury: [], faktura_polozky: [], vydejky: [], vydejka_polozky: [],
     };
+    db.dalsi.vydejka = 1;
     db.dalsi.odberatel = 1; db.dalsi.faktura = 1; db.dalsi.fpol = 1;
     for (const [nazev, ean, kat, cena, nakup, stav, jed] of ZBOZI) {
       const id = db.dalsi.zbozi++;
@@ -276,6 +277,16 @@
       dobropis: ['2', '3'].includes(txt(koren, 'DocumentType')), celkem_bez_dph: hal(txt(koren, 'LegalMonetaryTotal', 'TaxExclusiveAmount')), polozky, varovani: [] };
   }
 
+  const DUVODY_D = { ODPIS: 'odpis', SPOTREBA: 'vlastní spotřeba', VRACENI: 'vrácení dodavateli', MANKO: 'manko', JINE: 'jiný výdej' };
+  function skladDoklad(druh, id) {
+    const prijem = druh === 'prijemky';
+    const d = (prijem ? DB.prijemky : DB.vydejky).find((x) => x.id === id);
+    if (!d) throw new Chyba(404, 'Doklad nenalezen');
+    const pol = (prijem ? DB.prijemka_polozky.filter((x) => x.prijemka_id === id) : DB.vydejka_polozky.filter((x) => x.vydejka_id === id))
+      .map((x) => { const z = zbozi(x.zbozi_id) || {}; return { ...x, nazev: z.nazev, jednotka: z.jednotka, ean: eanyZbozi(x.zbozi_id)[0] || null }; });
+    return { ...d, stornovano: d.stornovano || 0, typ: prijem ? 'PRIJEMKA' : 'VYDEJKA', uzivatel: (DB.uzivatele.find((u) => u.id === d.uzivatel_id) || {}).jmeno || null, polozky: pol };
+  }
+
   const klicDodavatele = (ico, nazev) => (ico ? 'ICO:' + ico.replace(/\D/g, '') : nazev ? 'NAZEV:' + norm(nazev).trim() : null);
 
   function sparuj(f) {
@@ -415,12 +426,13 @@
       const dod = klicDodavatele(b.dodavatel_ico, b.dodavatel);
       const celkem = b.polozky.reduce((s, p) => s + Math.round((p.nakupni_cena || 0) * p.mnozstvi), 0);
       const id = DB.dalsi.prijemka++;
-      DB.prijemky.push({ id, cislo, cas, uzivatel_id: u.id, dodavatel: b.dodavatel, dodavatel_ico: b.dodavatel_ico, doklad: b.doklad, poznamka: b.poznamka, celkem_bez_dph: celkem, soubor_id: null });
+      DB.prijemky.push({ id, cislo, cas, uzivatel_id: u.id, dodavatel: b.dodavatel, dodavatel_ico: b.dodavatel_ico, doklad: b.doklad, poznamka: b.poznamka, celkem_bez_dph: celkem, soubor_id: null, stornovano: 0 });
       for (const p of b.polozky) {
         if (!zbozi(p.zbozi_id)) throw new Chyba(400, `Zboží ${p.zbozi_id} neexistuje`);
         DB.prijemka_polozky.push({ prijemka_id: id, zbozi_id: p.zbozi_id, mnozstvi: p.mnozstvi, nakupni_cena: p.nakupni_cena });
         pohyb(DB, p.zbozi_id, p.mnozstvi, 'PRIJEM', cislo, u.id, b.doklad);
         if (p.nakupni_cena != null) zbozi(p.zbozi_id).nakupni_cena = p.nakupni_cena;
+        if (p.prodejni_cena != null) zbozi(p.zbozi_id).cena = p.prodejni_cena;
         if (p.kod_dodavatele && dod) DB.dodavatel_kody[dod + '|' + p.kod_dodavatele] = { zbozi_id: p.zbozi_id, koeficient: p.koeficient || 1 };
         if (p.ean_z_faktury && !DB.eany[p.ean_z_faktury]) DB.eany[p.ean_z_faktury] = p.zbozi_id;
       }
@@ -430,6 +442,47 @@
       prihlasen();
       return DB.prijemky.slice().reverse().map((p) => ({ ...p, uzivatel: (DB.uzivatele.find((u) => u.id === p.uzivatel_id) || {}).jmeno,
         pocet: DB.prijemka_polozky.filter((x) => x.prijemka_id === p.id).length }));
+    }],
+    ['POST', /^\/api\/vydejky$/, (m, q, b) => {
+      const u = spravce(); const cas = ted(); const rok = cas.slice(0, 4);
+      const cislo = `V${rok}-${String(dalsiCislo(DB, 'vydejka-' + rok)).padStart(5, '0')}`;
+      const id = DB.dalsi.vydejka++; let celkem = 0;
+      const v = { id, cislo, cas, uzivatel_id: u.id, duvod: b.duvod, komu: b.komu || null, poznamka: b.poznamka || null, celkem_nakup: 0, stornovano: 0 };
+      for (const p of b.polozky) {
+        const z = zbozi(p.zbozi_id); if (!z) throw new Chyba(400, `Zboží ${p.zbozi_id} neexistuje`);
+        DB.vydejka_polozky.push({ vydejka_id: id, zbozi_id: z.id, mnozstvi: p.mnozstvi, nakupni_cena: z.nakupni_cena });
+        pohyb(DB, z.id, -p.mnozstvi, 'VYDEJ', cislo, u.id, DUVODY_D[b.duvod]);
+        celkem += Math.round((z.nakupni_cena || 0) * p.mnozstvi);
+      }
+      v.celkem_nakup = celkem; DB.vydejky.push(v);
+      return { id, cislo, celkem_nakup: celkem };
+    }],
+    ['GET', /^\/api\/(prijemky|vydejky)\/(\d+)$/, (m) => { prihlasen(); return skladDoklad(m[1], +m[2]); }],
+    ['POST', /^\/api\/(prijemky|vydejky)\/(\d+)\/storno$/, (m) => {
+      const u = spravce(); const prijem = m[1] === 'prijemky';
+      const d = (prijem ? DB.prijemky : DB.vydejky).find((x) => x.id === +m[2]);
+      if (!d || d.stornovano) throw new Chyba(409, 'Doklad nejde stornovat');
+      (prijem ? DB.prijemka_polozky.filter((x) => x.prijemka_id === d.id) : DB.vydejka_polozky.filter((x) => x.vydejka_id === d.id))
+        .forEach((x) => pohyb(DB, x.zbozi_id, prijem ? -x.mnozstvi : x.mnozstvi, 'STORNO', d.cislo, u.id, prijem ? 'storno příjemky' : 'storno výdejky'));
+      d.stornovano = 1; return skladDoklad(m[1], d.id);
+    }],
+    ['GET', /^\/api\/sklad\/doklady$/, (m, q) => {
+      prihlasen(); const typ = q.get('typ') || 'vse'; const od = q.get('od') || ''; const doD = q.get('do') || ''; const t = norm((q.get('q') || '').trim());
+      const jm = (id) => (DB.uzivatele.find((x) => x.id === id) || {}).jmeno || null;
+      let r = [];
+      if (typ !== 'vydejky') r = r.concat(DB.prijemky.map((p) => ({ typ: 'PRIJEMKA', id: p.id, cislo: p.cislo, cas: p.cas, partner: p.dodavatel, duvod: null, doklad: p.doklad,
+        celkem: p.celkem_bez_dph, stornovano: p.stornovano || 0, soubor_id: null, uzivatel: jm(p.uzivatel_id), pocet: DB.prijemka_polozky.filter((x) => x.prijemka_id === p.id).length })));
+      if (typ !== 'prijemky') r = r.concat(DB.vydejky.map((v) => ({ typ: 'VYDEJKA', id: v.id, cislo: v.cislo, cas: v.cas, partner: v.komu, duvod: v.duvod, doklad: v.poznamka,
+        celkem: v.celkem_nakup, stornovano: v.stornovano, soubor_id: null, uzivatel: jm(v.uzivatel_id), pocet: DB.vydejka_polozky.filter((x) => x.vydejka_id === v.id).length })));
+      r = r.filter((d) => (!od || d.cas.slice(0, 10) >= od) && (!doD || d.cas.slice(0, 10) <= doD)
+        && (!t || d.cislo.toLowerCase().includes(t) || norm(d.partner).includes(t) || norm(d.doklad).includes(t)));
+      return r.sort((a, b) => (a.cas < b.cas ? 1 : -1));
+    }],
+    ['GET', /^\/api\/sklad\/pohyby$/, (m, q) => {
+      prihlasen(); const od = q.get('od') || ''; const doD = q.get('do') || ''; const typ = q.get('typ') || ''; const t = norm((q.get('q') || '').trim());
+      return DB.pohyby.slice().reverse().map((p) => { const z = zbozi(p.zbozi_id) || {}; return { ...p, nazev: z.nazev, jednotka: z.jednotka, uzivatel: (DB.uzivatele.find((x) => x.id === p.uzivatel_id) || {}).jmeno || null }; })
+        .filter((p) => (!od || p.cas.slice(0, 10) >= od) && (!doD || p.cas.slice(0, 10) <= doD) && (!typ || p.typ === typ)
+          && (!t || norm(p.nazev).includes(t) || (p.doklad || '').toLowerCase().includes(t) || DB.eany[t] === p.zbozi_id)).slice(0, 500);
     }],
     ['POST', /^\/api\/sklad\/korekce$/, (m, q, b) => {
       const u = spravce(); const z = zbozi(b.zbozi_id); if (!z) throw new Chyba(404, 'Zboží nenalezeno');

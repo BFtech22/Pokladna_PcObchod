@@ -131,13 +131,34 @@ CREATE TABLE IF NOT EXISTS pohyby (
     cas TEXT NOT NULL,
     zbozi_id INTEGER NOT NULL REFERENCES zbozi(id),
     mnozstvi REAL NOT NULL,
-    typ TEXT NOT NULL CHECK (typ IN ('PRIJEM', 'PRODEJ', 'STORNO', 'KOREKCE')),
+    typ TEXT NOT NULL CHECK (typ IN ('PRIJEM', 'PRODEJ', 'STORNO', 'KOREKCE', 'VYDEJ')),
     doklad TEXT,
     uzivatel_id INTEGER REFERENCES uzivatele(id),
     poznamka TEXT,
     stav_po REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_pohyby_zbozi ON pohyby(zbozi_id, cas);
+CREATE INDEX IF NOT EXISTS ix_pohyby_cas ON pohyby(cas);
+
+CREATE TABLE IF NOT EXISTS vydejky (
+    id INTEGER PRIMARY KEY,
+    cislo TEXT NOT NULL UNIQUE,
+    cas TEXT NOT NULL,
+    uzivatel_id INTEGER REFERENCES uzivatele(id),
+    duvod TEXT NOT NULL CHECK (duvod IN ('ODPIS', 'SPOTREBA', 'VRACENI', 'MANKO', 'JINE')),
+    komu TEXT,                                 -- dodavatel při vrácení, zakázka u spotřeby…
+    poznamka TEXT,
+    celkem_nakup INTEGER NOT NULL DEFAULT 0,   -- hodnota v nákupních cenách bez DPH
+    stornovano INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS vydejka_polozky (
+    id INTEGER PRIMARY KEY,
+    vydejka_id INTEGER NOT NULL REFERENCES vydejky(id),
+    zbozi_id INTEGER NOT NULL REFERENCES zbozi(id),
+    mnozstvi REAL NOT NULL,
+    nakupni_cena INTEGER
+);
 
 CREATE TABLE IF NOT EXISTS dodavatel_kody (     -- naučené párování: kód dodavatele → naše zboží
     dodavatel TEXT NOT NULL,                     -- "ICO:12345678" nebo "NAZEV:ab computer"
@@ -262,6 +283,7 @@ VYCHOZI_NASTAVENI = {
 
 # Sloupce přidané po prvním nasazení: (tabulka, sloupec, definice)
 DOPLNENE_SLOUPCE = [
+    ("prijemky", "stornovano", "INTEGER NOT NULL DEFAULT 0"),
     ("prijemky", "dodavatel_ico", "TEXT"),
     ("prijemky", "soubor_id", "INTEGER REFERENCES faktury_soubory(id)"),
 ]
@@ -313,6 +335,7 @@ def inicializuj() -> None:
     with spojeni() as con:
         con.execute("PRAGMA journal_mode = WAL")
         con.executescript(SCHEMA)
+        _rozsir_typy_pohybu(con)
         for tabulka, sloupec, definice in DOPLNENE_SLOUPCE:
             if sloupec not in [r[1] for r in con.execute(f"PRAGMA table_info({tabulka})")]:
                 con.execute(f"ALTER TABLE {tabulka} ADD COLUMN {sloupec} {definice}")
@@ -324,6 +347,26 @@ def inicializuj() -> None:
             if soubor.exists():
                 con.execute("UPDATE nastaveni SET hodnota = ? WHERE klic = 'eet_cert_heslo'",
                             (soubor.read_text().strip(),))
+
+
+def _rozsir_typy_pohybu(con: sqlite3.Connection) -> None:
+    """Starší databáze nemají v pohybech typ VYDEJ – SQLite neumí změnit CHECK, tabulka se přestaví."""
+    ddl = con.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'pohyby'").fetchone()[0]
+    if "'VYDEJ'" in ddl:
+        return
+    nova = SCHEMA.split("CREATE TABLE IF NOT EXISTS pohyby (", 1)[1].split(");", 1)[0]
+    con.execute("PRAGMA foreign_keys = OFF")
+    con.executescript(f"""
+        BEGIN;
+        CREATE TABLE pohyby_nove ({nova});
+        INSERT INTO pohyby_nove (id, cas, zbozi_id, mnozstvi, typ, doklad, uzivatel_id, poznamka, stav_po)
+            SELECT id, cas, zbozi_id, mnozstvi, typ, doklad, uzivatel_id, poznamka, stav_po FROM pohyby;
+        DROP TABLE pohyby;
+        ALTER TABLE pohyby_nove RENAME TO pohyby;
+        CREATE INDEX IF NOT EXISTS ix_pohyby_zbozi ON pohyby(zbozi_id, cas);
+        CREATE INDEX IF NOT EXISTS ix_pohyby_cas ON pohyby(cas);
+        COMMIT;""")
+    con.execute("PRAGMA foreign_keys = ON")
 
 
 def nastaveni(con: sqlite3.Connection) -> dict:

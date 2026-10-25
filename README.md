@@ -14,7 +14,12 @@ Lokální pokladna se skladem a EET 2.0 pro prodejny PcObchod (Rumburk, Varnsdor
   - náhled a tisk A4, PDF s QR platbou, odeslání e-mailem, označení úhrady, storno a kopie.
 - **Uzávěrka e-mailem:** souhrn dne v těle e-mailu a měsíční přehled v Excelu (dny, prodejky, prodané zboží). Odesílá se tlačítkem nebo automaticky v nastavený čas přes SMTP účet prodejny.
 - **Zboží:** katalog s více EAN na položku, kategorie, prodejní a nákupní cena, marže, minimální stav a historie pohybů.
-- **Sklad:** stav a hodnota skladu, příjem zboží čtečkou (příjemka) a inventura.
+- **Sklad:**
+  - stav a hodnota skladu, inventura,
+  - příjem zboží čtečkou nebo z faktury (příjemka); u každé položky jde rovnou změnit prodejní cenu a pokladna ukáže marži,
+  - výdej zboží jinak než prodejem (výdejka): odpis, vlastní spotřeba/servis, vrácení dodavateli, manko, jiný výdej; hodnota v nákupních cenách, upozorní, když zboží na skladě nestačí,
+  - doklady: příjemky a výdejky s filtrem období a hledáním, detail s tiskem A4 (Předal/Převzal), storno, které vrátí stav skladu,
+  - pohyby: každý pohyb zboží (příjem, prodej, výdej, storno, korekce) se stavem po pohybu.
 - **Naskladnění z faktury:** nahraje se faktura dodavatele a pokladna z ní vytáhne položky a spáruje je s katalogem.
   - Formáty: ISDOC, ISDOCX nebo PDF. Z PDF se nejdřív zkusí vložený ISDOC, pak čtení přes Claude (když je v nastavení API klíč) a nakonec odhad z textu PDF.
   - Párování: podle EAN, podle zapamatovaného kódu dodavatele, podle interního kódu a nakonec podle podobného názvu (jen jako návrh ke kontrole).

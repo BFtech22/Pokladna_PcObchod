@@ -469,6 +469,7 @@ class PolozkaPrijemky(BaseModel):
     kod_dodavatele: Optional[str] = None                      # z faktury – uloží se naučené párování
     ean_z_faktury: Optional[str] = None                       # z faktury – doplní se ke zboží, když ho nemá
     koeficient: float = Field(default=1, gt=0)
+    prodejni_cena: Optional[int] = Field(default=None, ge=0)  # nová prodejní cena s DPH, když se při příjmu mění
 
 
 class PrijemkaVstup(BaseModel):
@@ -501,6 +502,8 @@ def nova_prijemka(data: PrijemkaVstup, u=Depends(spravce), con: sqlite3.Connecti
             db.pohyb(con, p.zbozi_id, p.mnozstvi, "PRIJEM", cislo, u["id"], data.doklad)
             if p.nakupni_cena is not None:
                 con.execute("UPDATE zbozi SET nakupni_cena = ? WHERE id = ?", (p.nakupni_cena, p.zbozi_id))
+            if p.prodejni_cena is not None:
+                con.execute("UPDATE zbozi SET cena = ?, upraveno = ? WHERE id = ?", (p.prodejni_cena, cas, p.zbozi_id))
             if p.kod_dodavatele and dod:
                 con.execute(
                     "INSERT INTO dodavatel_kody (dodavatel, kod, zbozi_id, koeficient, upraveno) VALUES (?, ?, ?, ?, ?) "
@@ -575,6 +578,144 @@ def seznam_prijemek(u=Depends(uzivatel), con: sqlite3.Connection = Depends(con_d
     return [dict(r) for r in con.execute(
         "SELECT p.*, u.jmeno AS uzivatel, (SELECT COUNT(*) FROM prijemka_polozky WHERE prijemka_id = p.id) AS pocet "
         "FROM prijemky p LEFT JOIN uzivatele u ON u.id = p.uzivatel_id ORDER BY p.id DESC LIMIT 200")]
+
+
+DUVODY_VYDEJE = {"ODPIS": "odpis", "SPOTREBA": "vlastní spotřeba", "VRACENI": "vrácení dodavateli", "MANKO": "manko", "JINE": "jiný výdej"}
+
+
+class PolozkaVydejky(BaseModel):
+    zbozi_id: int
+    mnozstvi: float = Field(gt=0, le=99999)
+
+
+class VydejkaVstup(BaseModel):
+    duvod: str = Field(pattern="^(ODPIS|SPOTREBA|VRACENI|MANKO|JINE)$")
+    komu: Optional[str] = None
+    poznamka: Optional[str] = None
+    polozky: List[PolozkaVydejky] = Field(min_length=1)
+
+
+@app.post("/api/vydejky")
+def nova_vydejka(data: VydejkaVstup, u=Depends(spravce), con: sqlite3.Connection = Depends(con_dep)):
+    with db.transakce(con):
+        cas = db.ted()
+        rok = cas[:4]
+        cislo = f"V{rok}-{db.dalsi_cislo(con, 'vydejka-' + rok):05d}"
+        vid = con.execute("INSERT INTO vydejky (cislo, cas, uzivatel_id, duvod, komu, poznamka) VALUES (?, ?, ?, ?, ?, ?)",
+                          (cislo, cas, u["id"], data.duvod, (data.komu or "").strip() or None,
+                           (data.poznamka or "").strip() or None)).lastrowid
+        celkem = 0
+        for p in data.polozky:
+            z = con.execute("SELECT nakupni_cena FROM zbozi WHERE id = ?", (p.zbozi_id,)).fetchone()
+            if z is None:
+                raise HTTPException(400, f"Zboží {p.zbozi_id} neexistuje")
+            con.execute("INSERT INTO vydejka_polozky (vydejka_id, zbozi_id, mnozstvi, nakupni_cena) VALUES (?, ?, ?, ?)",
+                        (vid, p.zbozi_id, p.mnozstvi, z["nakupni_cena"]))
+            db.pohyb(con, p.zbozi_id, -p.mnozstvi, "VYDEJ", cislo, u["id"], DUVODY_VYDEJE[data.duvod])
+            celkem += int(round((z["nakupni_cena"] or 0) * p.mnozstvi))
+        con.execute("UPDATE vydejky SET celkem_nakup = ? WHERE id = ?", (celkem, vid))
+    return {"id": vid, "cislo": cislo, "celkem_nakup": celkem}
+
+
+def _polozky_dokladu(con: sqlite3.Connection, tabulka: str, sloupec: str, did: int) -> list:
+    return [dict(r) for r in con.execute(
+        f"SELECT x.*, z.nazev, z.jednotka, (SELECT ean FROM zbozi_ean e WHERE e.zbozi_id = z.id ORDER BY rowid LIMIT 1) AS ean "
+        f"FROM {tabulka} x JOIN zbozi z ON z.id = x.zbozi_id WHERE x.{sloupec} = ? ORDER BY x.id", (did,))]
+
+
+@app.get("/api/prijemky/{pid}")
+def detail_prijemky(pid: int, u=Depends(uzivatel), con: sqlite3.Connection = Depends(con_dep)):
+    r = con.execute("SELECT p.*, u.jmeno AS uzivatel FROM prijemky p LEFT JOIN uzivatele u ON u.id = p.uzivatel_id WHERE p.id = ?",
+                    (pid,)).fetchone()
+    if r is None:
+        raise HTTPException(404, "Příjemka nenalezena")
+    return {**dict(r), "typ": "PRIJEMKA", "polozky": _polozky_dokladu(con, "prijemka_polozky", "prijemka_id", pid)}
+
+
+@app.get("/api/vydejky/{vid}")
+def detail_vydejky(vid: int, u=Depends(uzivatel), con: sqlite3.Connection = Depends(con_dep)):
+    r = con.execute("SELECT v.*, u.jmeno AS uzivatel FROM vydejky v LEFT JOIN uzivatele u ON u.id = v.uzivatel_id WHERE v.id = ?",
+                    (vid,)).fetchone()
+    if r is None:
+        raise HTTPException(404, "Výdejka nenalezena")
+    return {**dict(r), "typ": "VYDEJKA", "polozky": _polozky_dokladu(con, "vydejka_polozky", "vydejka_id", vid)}
+
+
+@app.post("/api/prijemky/{pid}/storno")
+def storno_prijemky(pid: int, u=Depends(spravce), con: sqlite3.Connection = Depends(con_dep)):
+    with db.transakce(con):
+        p = con.execute("SELECT * FROM prijemky WHERE id = ?", (pid,)).fetchone()
+        if p is None or p["stornovano"]:
+            raise HTTPException(409, "Příjemku nejde stornovat")
+        for x in con.execute("SELECT * FROM prijemka_polozky WHERE prijemka_id = ?", (pid,)).fetchall():
+            db.pohyb(con, x["zbozi_id"], -x["mnozstvi"], "STORNO", p["cislo"], u["id"], "storno příjemky")
+        con.execute("UPDATE prijemky SET stornovano = 1 WHERE id = ?", (pid,))
+    return detail_prijemky(pid, u, con)
+
+
+@app.post("/api/vydejky/{vid}/storno")
+def storno_vydejky(vid: int, u=Depends(spravce), con: sqlite3.Connection = Depends(con_dep)):
+    with db.transakce(con):
+        v = con.execute("SELECT * FROM vydejky WHERE id = ?", (vid,)).fetchone()
+        if v is None or v["stornovano"]:
+            raise HTTPException(409, "Výdejku nejde stornovat")
+        for x in con.execute("SELECT * FROM vydejka_polozky WHERE vydejka_id = ?", (vid,)).fetchall():
+            db.pohyb(con, x["zbozi_id"], x["mnozstvi"], "STORNO", v["cislo"], u["id"], "storno výdejky")
+        con.execute("UPDATE vydejky SET stornovano = 1 WHERE id = ?", (vid,))
+    return detail_vydejky(vid, u, con)
+
+
+@app.get("/api/sklad/doklady")
+def skladove_doklady(typ: str = "vse", od: Optional[str] = None, do: Optional[str] = None, q: str = "",
+                     u=Depends(uzivatel), con: sqlite3.Connection = Depends(con_dep)):
+    casti, par = [], []
+    obdobi = ""
+    if od:
+        obdobi += " AND d.cas >= ?"
+    if do:
+        obdobi += " AND d.cas < ?"
+    meze = ([od] if od else []) + ([(date.fromisoformat(do) + timedelta(days=1)).isoformat()] if do else [])
+    hledej = " AND (d.cislo LIKE ? OR norm(COALESCE(d.partner, '')) LIKE ? OR norm(COALESCE(d.doklad, '')) LIKE ?)" if q.strip() else ""
+    hpar = [f"%{q.strip()}%"] + [f"%{db.bez_diakritiky(q.strip())}%"] * 2 if q.strip() else []
+    if typ in ("vse", "prijemky"):
+        casti.append("SELECT 'PRIJEMKA' AS typ, p.id, p.cislo, p.cas, p.dodavatel AS partner, NULL AS duvod, p.doklad, "
+                     "p.celkem_bez_dph AS celkem, p.stornovano, p.soubor_id, p.uzivatel_id, "
+                     "(SELECT COUNT(*) FROM prijemka_polozky WHERE prijemka_id = p.id) AS pocet FROM prijemky p")
+    if typ in ("vse", "vydejky"):
+        casti.append("SELECT 'VYDEJKA' AS typ, v.id, v.cislo, v.cas, v.komu AS partner, v.duvod, v.poznamka AS doklad, "
+                     "v.celkem_nakup AS celkem, v.stornovano, NULL AS soubor_id, v.uzivatel_id, "
+                     "(SELECT COUNT(*) FROM vydejka_polozky WHERE vydejka_id = v.id) AS pocet FROM vydejky v")
+    if not casti:
+        return []
+    for _ in casti:
+        par += meze + hpar
+    sql = " UNION ALL ".join(f"SELECT * FROM ({c}) d WHERE 1=1{obdobi}{hledej}" for c in casti)
+    rows = [dict(r) for r in con.execute(f"SELECT x.*, u.jmeno AS uzivatel FROM ({sql}) x LEFT JOIN uzivatele u ON u.id = x.uzivatel_id "
+                                         "ORDER BY x.cas DESC LIMIT 500", par)]
+    return rows
+
+
+@app.get("/api/sklad/pohyby")
+def skladove_pohyby(od: Optional[str] = None, do: Optional[str] = None, typ: str = "", q: str = "", limit: int = 500,
+                    u=Depends(uzivatel), con: sqlite3.Connection = Depends(con_dep)):
+    sql = ("SELECT p.*, z.nazev, z.jednotka, u.jmeno AS uzivatel FROM pohyby p JOIN zbozi z ON z.id = p.zbozi_id "
+           "LEFT JOIN uzivatele u ON u.id = p.uzivatel_id WHERE 1=1")
+    par: list = []
+    if od:
+        sql += " AND p.cas >= ?"
+        par.append(od)
+    if do:
+        sql += " AND p.cas < ?"
+        par.append((date.fromisoformat(do) + timedelta(days=1)).isoformat())
+    if typ:
+        sql += " AND p.typ = ?"
+        par.append(typ)
+    if q.strip():
+        sql += (" AND (norm(z.nazev) LIKE ? OR p.doklad LIKE ? OR z.id IN (SELECT zbozi_id FROM zbozi_ean WHERE ean = ?))")
+        par += [f"%{db.bez_diakritiky(q.strip())}%", f"%{q.strip()}%", q.strip()]
+    sql += " ORDER BY p.id DESC LIMIT ?"
+    par.append(min(max(limit, 1), 5000))
+    return [dict(r) for r in con.execute(sql, par)]
 
 
 class KorekceVstup(BaseModel):
