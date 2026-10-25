@@ -26,6 +26,12 @@ Zatím chybí: import exportu z Trellu.
 
 ![Prodejní obrazovka](_zdroje/nahledy/prodej_2026-10-25.jpg)
 
+## Demo v prohlížeči
+
+**https://bftech22.github.io/Pokladna_PcObchod/** – vyzkoušení bez instalace, i na mobilu. PIN šéf `1234`, prodavač `1111`. Data zůstávají jen v prohlížeči toho, kdo demo zkouší, a EET se jen předstírá. Vzorová faktura ISDOC ke zkoušení naskladnění se stáhne z lišty dema.
+
+Demo je složka `docs/` (GitHub Pages: Settings → Pages → Deploy from branch `main`, složka `/docs`). Po změně rozhraní se znovu sestaví příkazem `.venv/bin/python -I _zdroje/skripty/postav_demo.py`. Napodobenina serveru je v `demo/demo.js`.
+
 ## Instalace a spuštění
 
 Je potřeba Python 3.9 nebo novější.

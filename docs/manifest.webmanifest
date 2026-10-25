@@ -1,0 +1,16 @@
+{
+ "name": "Pokladna PcObchod – demo",
+ "short_name": "Pokladna demo",
+ "start_url": "./",
+ "display": "standalone",
+ "background_color": "#ffffff",
+ "theme_color": "#d9302a",
+ "lang": "cs",
+ "icons": [
+  {
+   "src": "static/img/favicon-192.png",
+   "sizes": "192x192",
+   "type": "image/png"
+  }
+ ]
+}

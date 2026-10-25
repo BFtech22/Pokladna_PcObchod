@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Invoice xmlns="http://isdoc.cz/namespace/2013" version="6.0.2">
+  <DocumentType>1</DocumentType>
+  <ID>FV2026-0815</ID>
+  <UUID>6F2A1B3C-1111-4222-8333-944455556666</UUID>
+  <IssueDate>2026-10-24</IssueDate>
+  <VATApplicable>true</VATApplicable>
+  <LocalCurrencyCode>CZK</LocalCurrencyCode>
+  <CurrRate>1</CurrRate><RefCurrRate>1</RefCurrRate>
+  <AccountingSupplierParty><Party>
+    <PartyIdentification><ID>99999991</ID></PartyIdentification>
+    <PartyName><Name>Testovací Distribuce s.r.o.</Name></PartyName>
+    <PostalAddress><StreetName>Zkušební</StreetName><BuildingNumber>1</BuildingNumber><CityName>Praha</CityName><PostalZone>11000</PostalZone><Country><IdentificationCode>CZ</IdentificationCode><Name>Česká republika</Name></Country></PostalAddress>
+    <PartyTaxScheme><CompanyID>CZ99999991</CompanyID><TaxScheme>VAT</TaxScheme></PartyTaxScheme>
+  </Party></AccountingSupplierParty>
+  <InvoiceLines>
+    <InvoiceLine>
+      <ID>1</ID>
+      <InvoicedQuantity unitCode="ks">10</InvoicedQuantity>
+      <LineExtensionAmount>600.00</LineExtensionAmount>
+      <LineExtensionAmountTaxInclusive>726.00</LineExtensionAmountTaxInclusive>
+      <LineExtensionTaxAmount>126.00</LineExtensionTaxAmount>
+      <UnitPrice>60.00</UnitPrice>
+      <UnitPriceTaxInclusive>72.60</UnitPriceTaxInclusive>
+      <ClassifiedTaxCategory><Percent>21</Percent><VATCalculationMethod>0</VATCalculationMethod></ClassifiedTaxCategory>
+      <Item>
+        <Description>Kabel USB-C - USB-C 1m 60W</Description>
+        <SellersItemIdentification><ID>KAB-CC-1M</ID></SellersItemIdentification>
+        <StandardItemIdentification><ID schemeID="GTIN">8595680412013</ID></StandardItemIdentification>
+      </Item>
+    </InvoiceLine>
+    <InvoiceLine>
+      <ID>2</ID>
+      <InvoicedQuantity unitCode="bal">2</InvoicedQuantity>
+      <LineExtensionAmount>600.00</LineExtensionAmount>
+      <LineExtensionAmountTaxInclusive>726.00</LineExtensionAmountTaxInclusive>
+      <LineExtensionTaxAmount>126.00</LineExtensionTaxAmount>
+      <UnitPrice>300.00</UnitPrice>
+      <UnitPriceTaxInclusive>363.00</UnitPriceTaxInclusive>
+      <ClassifiedTaxCategory><Percent>21</Percent><VATCalculationMethod>0</VATCalculationMethod></ClassifiedTaxCategory>
+      <Item>
+        <Description>Tvrzené sklo iPhone 15 (bal. 10 ks)</Description>
+        <SellersItemIdentification><ID>TG-IP15-10</ID></SellersItemIdentification>
+        
+      </Item>
+    </InvoiceLine>
+    <InvoiceLine>
+      <ID>3</ID>
+      <InvoicedQuantity unitCode="ks">3</InvoicedQuantity>
+      <LineExtensionAmount>615.00</LineExtensionAmount>
+      <LineExtensionAmountTaxInclusive>744.15</LineExtensionAmountTaxInclusive>
+      <LineExtensionTaxAmount>129.15</LineExtensionTaxAmount>
+      <UnitPrice>205.00</UnitPrice>
+      <UnitPriceTaxInclusive>248.05</UnitPriceTaxInclusive>
+      <ClassifiedTaxCategory><Percent>21</Percent><VATCalculationMethod>0</VATCalculationMethod></ClassifiedTaxCategory>
+      <Item>
+        <Description>Myš Logitech M185 bezdrátová</Description>
+        <SellersItemIdentification><ID>LOG-M185</ID></SellersItemIdentification>
+        <StandardItemIdentification><ID schemeID="GTIN">5099206027312</ID></StandardItemIdentification>
+      </Item>
+    </InvoiceLine>
+    <InvoiceLine>
+      <ID>4</ID>
+      <InvoicedQuantity unitCode="ks">5</InvoicedQuantity>
+      <LineExtensionAmount>475.00</LineExtensionAmount>
+      <LineExtensionAmountTaxInclusive>574.75</LineExtensionAmountTaxInclusive>
+      <LineExtensionTaxAmount>99.75</LineExtensionTaxAmount>
+      <UnitPrice>95.00</UnitPrice>
+      <UnitPriceTaxInclusive>114.95</UnitPriceTaxInclusive>
+      <ClassifiedTaxCategory><Percent>21</Percent><VATCalculationMethod>0</VATCalculationMethod></ClassifiedTaxCategory>
+      <Item>
+        <Description>Magnetický nabíjecí kabel USB-C 2 m</Description>
+        <SellersItemIdentification><ID>KAB-MAG-2M</ID></SellersItemIdentification>
+        <StandardItemIdentification><ID schemeID="GTIN">8595680412165</ID></StandardItemIdentification>
+      </Item>
+    </InvoiceLine>
+    <InvoiceLine>
+      <ID>5</ID>
+      <InvoicedQuantity unitCode="ks">4</InvoicedQuantity>
+      <LineExtensionAmount>232.00</LineExtensionAmount>
+      <LineExtensionAmountTaxInclusive>280.72</LineExtensionAmountTaxInclusive>
+      <LineExtensionTaxAmount>48.72</LineExtensionTaxAmount>
+      <UnitPrice>58.00</UnitPrice>
+      <UnitPriceTaxInclusive>70.18</UnitPriceTaxInclusive>
+      <ClassifiedTaxCategory><Percent>21</Percent><VATCalculationMethod>0</VATCalculationMethod></ClassifiedTaxCategory>
+      <Item>
+        <Description>Silikonovy obal iPhone 15 cerny</Description>
+        
+        
+      </Item>
+    </InvoiceLine>
+    <InvoiceLine>
+      <ID>6</ID>
+      <InvoicedQuantity unitCode="ks">1</InvoicedQuantity>
+      <LineExtensionAmount>99.00</LineExtensionAmount>
+      <LineExtensionAmountTaxInclusive>119.79</LineExtensionAmountTaxInclusive>
+      <LineExtensionTaxAmount>20.79</LineExtensionTaxAmount>
+      <UnitPrice>99.00</UnitPrice>
+      <UnitPriceTaxInclusive>119.79</UnitPriceTaxInclusive>
+      <ClassifiedTaxCategory><Percent>21</Percent><VATCalculationMethod>0</VATCalculationMethod></ClassifiedTaxCategory>
+      <Item>
+        <Description>Doprava PPL</Description>
+        
+        
+      </Item>
+    </InvoiceLine>
+  </InvoiceLines>
+  <LegalMonetaryTotal>
+    <TaxExclusiveAmount>2621.00</TaxExclusiveAmount>
+    <TaxInclusiveAmount>3171.41</TaxInclusiveAmount>
+    <PayableAmount>3171.41</PayableAmount>
+  </LegalMonetaryTotal>
+</Invoice>

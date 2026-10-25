@@ -79,7 +79,7 @@ function okno({ titul, obsah, pata = '', siroke = false, poZavreni }) {
       <div class="hlav"><h2>${esc(titul)}</h2><button class="zavrit" aria-label="Zavřít">×</button></div>
       <div class="telo">${obsah}</div>${pata ? `<div class="pata">${pata}</div>` : ''}</div>`;
   document.body.appendChild(z);
-  const o = { el: z, zavri() { if (!z.isConnected) return; z.remove(); okna.splice(okna.indexOf(o), 1); poZavreni && poZavreni(); fokusSken(); } };
+  const o = { el: z, zavri() { const i = okna.indexOf(o); if (i < 0) return; okna.splice(i, 1); z.remove(); poZavreni && poZavreni(); fokusSken(); } };
   okna.push(o);
   $('.zavrit', z).onclick = () => o.zavri();
   z.addEventListener('mousedown', (e) => { if (e.target === z) o.zavri(); });
@@ -116,13 +116,13 @@ async function start() {
     vykresliKostru();
     route();
   } catch (e) {
-    $('#aplikace').innerHTML = `<div class="prihlaseni"><div class="karta"><img class="logo" src="/static/img/logo.webp" alt="PcObchod"><p class="chyba-text">${esc(e.message)}</p><button class="btn hl" onclick="location.reload()">Zkusit znovu</button></div></div>`;
+    $('#aplikace').innerHTML = `<div class="prihlaseni"><div class="karta"><img class="logo" src="static/img/logo.webp" alt="PcObchod"><p class="chyba-text">${esc(e.message)}</p><button class="btn hl" onclick="location.reload()">Zkusit znovu</button></div></div>`;
   }
 }
 
 function vykresliPrvniSpravce() {
   $('#aplikace').innerHTML = `<div class="prihlaseni"><form class="karta" id="f">
-    <img class="logo" src="/static/img/logo.webp" alt="PcObchod">
+    <img class="logo" src="static/img/logo.webp" alt="PcObchod">
     <h2 style="margin:0 0 6px">První spuštění</h2>
     <p class="mut" style="margin:0 0 16px">Založte správce pokladny. PIN slouží k přihlášení (4–12 číslic).</p>
     <div style="display:grid;gap:10px;text-align:left">
@@ -144,7 +144,7 @@ function vykresliPrvniSpravce() {
 function vykresliPrihlaseni() {
   let pin = '';
   $('#aplikace').innerHTML = `<div class="prihlaseni"><div class="karta">
-    <img class="logo" src="/static/img/logo.webp" alt="PcObchod">
+    <img class="logo" src="static/img/logo.webp" alt="PcObchod">
     <div class="mut">Zadejte svůj PIN</div>
     <div class="pin-tecky" id="tecky"></div>
     <div class="klavesnice">${[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => `<button data-c="${n}">${n}</button>`).join('')}
@@ -184,7 +184,7 @@ const MENU = [
 
 function vykresliKostru() {
   $('#aplikace').innerHTML = `<header class="lista">
-      <a href="#prodej"><img class="logo" src="/static/img/logo.webp" alt="PcObchod"></a>
+      <a href="#prodej"><img class="logo" src="static/img/logo.webp" alt="PcObchod"></a>
       <nav class="menu">${MENU.filter((m) => !m[2] || spravce()).map(([k, t]) => `<a href="#${k}" data-m="${k}">${t}</a>`).join('')}</nav>
       <div class="uzivatel">
         ${S.eetRezim === 'playground' ? '<span class="rezim-test" title="Tržby jdou do testovacího prostředí finanční správy">EET TEST</span>' : ''}
@@ -551,7 +551,7 @@ function rekapDph(polozky) {
 
 function hlavickaTisku() {
   const f = S.firma;
-  return `<img class="logo-tisk" src="/static/img/logo.png" alt="">
+  return `<img class="logo-tisk" src="static/img/logo.png" alt="">
     <div class="stred"><strong>${esc(f.firma_nazev || '')}</strong><br>${esc(f.firma_adresa || '')}
     ${f.firma_ico ? `<br>IČO: ${esc(f.firma_ico)}` : ''}${f.firma_dic ? ` · DIČ: ${esc(f.firma_dic)}` : ''}
     ${f.provozovna ? `<br>Provozovna: ${esc(f.provozovna)}` : ''}${f.telefon ? `<br>Tel.: ${esc(f.telefon)}` : ''}</div>`;

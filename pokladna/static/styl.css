@@ -231,3 +231,25 @@ input.sken {
   header.lista { height: auto; flex-wrap: wrap; padding: 8px 12px; gap: 8px; }
   nav.menu { order: 3; flex-basis: 100%; }
 }
+
+/* Telefon: tabulky se posouvají uvnitř karty, řádky košíku se skládají pod sebe. */
+@media (max-width: 640px) {
+  main { padding: 10px; }
+  .karta, .okno > .telo { overflow-x: auto; }
+  .karta > .hlav { flex-wrap: wrap; }
+  .karta > .hlav input[type=search] { width: 100% !important; }
+  input.sken { font-size: 18px; }
+  .kosik thead { display: none; }
+  .kosik table, .kosik tbody { display: block; }
+  .kosik tr { display: grid; grid-template-columns: 1fr auto auto; grid-template-areas: "n n x" "m c t"; align-items: center;
+    border-bottom: 1px solid var(--linka); padding: 4px 2px; }
+  .kosik td { border: 0; padding: 4px 6px; }
+  .kosik td:nth-child(1) { grid-area: n; }
+  .kosik td:nth-child(2) { grid-area: m; text-align: left !important; }
+  .kosik td:nth-child(3) { grid-area: c; }
+  .kosik td:nth-child(4) { grid-area: t; }
+  .kosik td:nth-child(5) { grid-area: x; }
+  .souhrn .celkem { font-size: 34px; }
+  .rychle { grid-template-columns: repeat(2, 1fr); }
+  .okno > .pata { flex-wrap: wrap; }
+}
