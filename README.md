@@ -6,7 +6,13 @@ Lokální pokladna se skladem a EET 2.0 pro prodejny PcObchod (Rumburk, Varnsdor
 
 - **Prodej:** načtení čtečkou EAN (`3*kód` = 3 kusy), hledání podle názvu bez ohledu na diakritiku, změna ceny a sleva, položka mimo katalog, vratka, platba hotově se zaokrouhlením a výpočtem vrácení, platba kartou. Klávesy F2 (hotově), F3 (kartou) a F8 (zrušit).
 - **EET 2.0:** tržba se odesílá hned při prodeji (mezní doba odezvy, výchozí 3 s). Když to nejde, fronta na pozadí zkouší odeslání každých 30 s (zákonná lhůta je 48 h). Storno odešle zápornou tržbu. V hlavičce je ukazatel stavu EET.
-- **Účtenky:** přehled po dnech, detail, storno, ruční opakované odeslání do EET a tisk na 80mm tiskárnu (zjednodušený daňový doklad s rekapitulací DPH).
+- **Prodejky:** přehled po dnech, detail, storno, ruční opakované odeslání do EET a tisk na 80mm tiskárnu (zjednodušený daňový doklad s rekapitulací DPH).
+- **Faktury vydané (po vzoru iDokladu):**
+  - přehled se souhrnem neuhrazených a po splatnosti, záložky Vše / Neuhrazené / Po splatnosti / Uhrazené,
+  - adresář kontaktů a doplnění firmy z ARES podle IČO,
+  - faktura z košíku, k už zaplacené prodejce nebo nová; placená hotově nebo kartou vytvoří i prodejku s EET, převodem vydá zboží ze skladu bez EET,
+  - náhled a tisk A4, PDF s QR platbou, odeslání e-mailem, označení úhrady, storno a kopie.
+- **Uzávěrka e-mailem:** souhrn dne v těle e-mailu a měsíční přehled v Excelu (dny, prodejky, prodané zboží). Odesílá se tlačítkem nebo automaticky v nastavený čas přes SMTP účet prodejny.
 - **Zboží:** katalog s více EAN na položku, kategorie, prodejní a nákupní cena, marže, minimální stav a historie pohybů.
 - **Sklad:** stav a hodnota skladu, příjem zboží čtečkou (příjemka) a inventura.
 - **Naskladnění z faktury:** nahraje se faktura dodavatele a pokladna z ní vytáhne položky a spáruje je s katalogem.
@@ -61,6 +67,9 @@ Pak otevřít http://localhost:8080, z jiného zařízení v síti `http://<adre
 | `pokladna/eet_fronta.py` | odeslání při prodeji a fronta na pozadí |
 | `pokladna/db.py` | SQLite schéma, částky v haléřích |
 | `pokladna/faktury.py` | čtení faktur (ISDOC, PDF, Claude API) a párování položek s katalogem |
+| `pokladna/fakturace.py` | vydané faktury: PDF, QR platba (SPAYD), IBAN |
+| `pokladna/posta.py` | e-maily přes SMTP, uzávěrka s Excelem, automatické odeslání |
+| `pokladna/uzaverka.py` | souhrn dne a měsíční přehled |
 | `pokladna/zaloha.py` | šifrovaná záloha, odeslání mimo prodejnu, plán a obnova (`python -m pokladna.zaloha`) |
 | `instalace/` | instalační skript, služba systemd a návod pro prodejnu |
 | `pokladna/server.py` | FastAPI: JSON API a statické rozhraní |

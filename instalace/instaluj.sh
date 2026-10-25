@@ -30,7 +30,7 @@ UZIV=pokladna
 echo "==> Balíčky"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -q
-apt-get install -y -q python3 python3-venv python3-pip rclone avahi-daemon unattended-upgrades ca-certificates curl unzip
+apt-get install -y -q python3 python3-venv python3-pip rclone avahi-daemon unattended-upgrades ca-certificates curl unzip fonts-dejavu-core
 
 echo "==> Čas a název"
 timedatectl set-timezone Europe/Prague

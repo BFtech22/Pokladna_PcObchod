@@ -83,7 +83,7 @@ main { padding: 16px; max-width: 1500px; margin: 0 auto; }
 .btn.velka { min-height: 64px; font-size: 20px; border-radius: 12px; }
 .btn.ikona { width: 36px; min-height: 36px; padding: 0; }
 
-input[type=text], input[type=number], input[type=password], input[type=date], input[type=search], select, textarea {
+input[type=text], input[type=number], input[type=password], input[type=date], input[type=search], input[type=email], select, textarea {
   width: 100%; min-height: 40px; padding: 8px 11px; border: 1px solid var(--linka-2); border-radius: 8px;
   background: var(--plocha);
 }
@@ -205,6 +205,45 @@ input.sken {
 .upozorneni { padding: 12px 14px; border-radius: 10px; background: var(--varovani-svetla); color: #7a4a00; margin-bottom: 14px; font-weight: 500; }
 .upozorneni.chyba { background: var(--chyba-svetla); color: var(--chyba); }
 
+/* --- faktury (po vzoru iDokladu) --- */
+.filtry { display: flex; gap: 4px; flex-wrap: wrap; }
+.filtr { border: 0; background: transparent; padding: 8px 12px; border-radius: 8px; font-weight: 600; color: var(--text-2); cursor: pointer; }
+.filtr:hover { background: var(--pozadi); }
+.filtr.aktivni { background: var(--text); color: #fff; }
+.fv-sloupce { display: grid; grid-template-columns: 1.2fr 1fr; gap: 14px; }
+.fv-blok { border: 1px solid var(--linka); border-radius: 12px; padding: 14px 16px; background: #fcfcfd; }
+.fv-blok h3 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-3); }
+.mrizka2 { grid-template-columns: 1fr 1fr; }
+.fv-blok table.tab input, .fv-blok table.tab select { min-height: 34px; padding: 4px 8px; }
+.fv-pata { display: flex; gap: 16px; margin-top: 14px; align-items: flex-start; }
+.fv-soucty { width: 300px; padding: 14px 16px; border-radius: 12px; background: var(--pozadi); display: flex; flex-direction: column; gap: 4px; }
+.fv-celkem { font-size: 20px; font-weight: 800; border-top: 1px solid var(--linka-2); padding-top: 8px; margin-top: 4px; }
+.papir { background: #fff; border: 1px solid var(--linka); border-radius: 6px; box-shadow: 0 2px 12px rgba(0,0,0,.08); padding: 32px 36px; }
+.fa { font-size: 13px; color: #1d1d1f; }
+.fa-hlav { display: flex; justify-content: space-between; align-items: flex-start; }
+.fa-logo { width: 190px; }
+.fa-titul { text-align: right; font-size: 20px; font-weight: 800; }
+.fa-titul span { display: block; font-size: 14px; font-weight: 500; margin-top: 2px; }
+.fa-titul em { display: block; color: var(--chyba); font-style: normal; font-size: 14px; }
+.fa-strany { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin: 26px 0 16px; line-height: 1.5; }
+.fa-strany h4 { margin: 0 0 4px; font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: .06em; }
+.fa-udaje { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 24px; background: #f5f5f7; padding: 12px 16px; border-radius: 4px; }
+.fa-udaje div { display: flex; gap: 10px; }
+.fa-udaje span { color: var(--text-2); min-width: 120px; }
+.fa-pol { width: 100%; border-collapse: collapse; margin-top: 18px; }
+.fa-pol th { background: var(--brand); color: #fff; font-size: 11px; text-align: right; padding: 7px 8px; }
+.fa-pol th:first-child, .fa-pol td:first-child { text-align: left; }
+.fa-pol td { padding: 7px 8px; border-bottom: 1px solid #e5e5ea; text-align: right; }
+.fa-spodek { display: flex; justify-content: space-between; align-items: flex-start; margin-top: 14px; gap: 20px; }
+.fa-qr { width: 120px; display: block; }
+.fa-soucty { text-align: right; }
+.fa-soucty table { margin-left: auto; border-collapse: collapse; }
+.fa-soucty th, .fa-soucty td { padding: 3px 0 3px 22px; text-align: right; font-size: 12px; }
+.fa-celkem { font-size: 19px; font-weight: 800; margin-top: 10px; }
+.fa-uhr { color: var(--ok); font-weight: 700; margin-top: 4px; }
+.fa-pozn { margin-top: 18px; white-space: pre-wrap; }
+.fa-pata { margin-top: 30px; text-align: center; color: var(--text-3); font-size: 11px; }
+
 /* --- tisk účtenky (80 mm) --- */
 #tisk { display: none; }
 @media print {
@@ -219,7 +258,10 @@ input.sken {
   #tisk .cara { border-top: 1px dashed #000; margin: 2mm 0; }
   #tisk .velke { font-size: 15px; font-weight: 800; }
   #tisk .r { text-align: right; white-space: nowrap; }
+  #tisk.a4 { page: a4; width: auto; font-size: 12px; }
+  #tisk.a4 * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
+@page a4 { size: A4; margin: 12mm; }
 
 @media (max-width: 1280px) {
   nav.menu a { padding: 8px 10px; }
@@ -233,6 +275,12 @@ input.sken {
 }
 
 /* Telefon: tabulky se posouvají uvnitř karty, řádky košíku se skládají pod sebe. */
+@media (max-width: 860px) {
+  .fv-sloupce, .fa-strany { grid-template-columns: 1fr; }
+  .fv-pata { flex-direction: column; }
+  .fv-soucty { width: 100%; }
+  .papir { padding: 18px; }
+}
 @media (max-width: 640px) {
   main { padding: 10px; }
   .karta, .okno > .telo { overflow-x: auto; }

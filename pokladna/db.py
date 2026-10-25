@@ -159,6 +159,60 @@ CREATE TABLE IF NOT EXISTS faktury_soubory (
     prijemka_id INTEGER REFERENCES prijemky(id)
 );
 
+CREATE TABLE IF NOT EXISTS odberatele (
+    id INTEGER PRIMARY KEY,
+    nazev TEXT NOT NULL,
+    ico TEXT,
+    dic TEXT,
+    ulice TEXT,
+    mesto TEXT,
+    psc TEXT,
+    email TEXT,
+    telefon TEXT,
+    poznamka TEXT,
+    vytvoreno TEXT NOT NULL,
+    upraveno TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_odberatele_ico ON odberatele(ico);
+
+CREATE TABLE IF NOT EXISTS faktury_vydane (
+    id INTEGER PRIMARY KEY,
+    cislo TEXT NOT NULL UNIQUE,
+    vs TEXT,
+    odberatel_id INTEGER REFERENCES odberatele(id),
+    odb_nazev TEXT NOT NULL,                   -- údaje odběratele v okamžiku vystavení
+    odb_ico TEXT,
+    odb_dic TEXT,
+    odb_adresa TEXT,
+    odb_email TEXT,
+    datum_vystaveni TEXT NOT NULL,
+    duzp TEXT NOT NULL,
+    splatnost TEXT NOT NULL,
+    forma_uhrady TEXT NOT NULL CHECK (forma_uhrady IN ('PREVOD', 'HOTOVE', 'KARTA', 'DOBIRKA')),
+    poznamka TEXT,
+    celkem INTEGER NOT NULL,                   -- s DPH v haléřích
+    stav TEXT NOT NULL DEFAULT 'NEUHRAZENO' CHECK (stav IN ('NEUHRAZENO', 'UHRAZENO', 'STORNO')),
+    datum_uhrady TEXT,
+    prodej_id INTEGER UNIQUE REFERENCES prodeje(id),   -- placeno na pokladně: účtenka s EET
+    uzivatel_id INTEGER REFERENCES uzivatele(id),
+    vytvoreno TEXT NOT NULL,
+    odeslano TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_faktury_vydane_stav ON faktury_vydane(stav, splatnost);
+
+CREATE TABLE IF NOT EXISTS faktura_vydana_polozky (
+    id INTEGER PRIMARY KEY,
+    faktura_id INTEGER NOT NULL REFERENCES faktury_vydane(id),
+    zbozi_id INTEGER REFERENCES zbozi(id),
+    nazev TEXT NOT NULL,
+    mnozstvi REAL NOT NULL,
+    jednotka TEXT,
+    cena INTEGER NOT NULL,                     -- jednotková cena s DPH
+    sazba_dph INTEGER NOT NULL,
+    celkem INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_fv_polozky ON faktura_vydana_polozky(faktura_id);
+
 CREATE TABLE IF NOT EXISTS citace (
     klic TEXT PRIMARY KEY,
     hodnota INTEGER NOT NULL
@@ -192,6 +246,18 @@ VYCHOZI_NASTAVENI = {
     "zaloha_ponechat_lokalne": "14",     # počet záloh na serveru
     "zaloha_ponechat_venku": "60",       # dní
     "zaloha_nazev": "",                  # název prodejny v názvu souboru zálohy
+    "faktura_rada": "FV",
+    "faktura_ucet": "",                  # např. 123456789/0800 – pro fakturu a QR platbu
+    "faktura_splatnost_dni": "14",
+    "faktura_pata": "",                  # např. zápis v obchodním rejstříku
+    "smtp_server": "",
+    "smtp_port": "587",
+    "smtp_zabezpeceni": "STARTTLS",      # STARTTLS | SSL | ZADNE
+    "smtp_uzivatel": "",
+    "smtp_heslo": "",
+    "smtp_odesilatel": "",
+    "uzaverka_prijemci": "",             # e-maily oddělené čárkou
+    "uzaverka_auto_cas": "",             # HH:MM = automaticky každý den, prázdné = jen ručně
 }
 
 # Sloupce přidané po prvním nasazení: (tabulka, sloupec, definice)

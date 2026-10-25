@@ -8,7 +8,8 @@
   'use strict';
 
   const KLIC = 'pokladna.demo.db';
-  const VERZE = 2;
+  const VERZE = 3;
+  window.POKLADNA_DEMO = true;
 
   const ZBOZI = [
     ['Kabel USB-C – USB-C 1 m, 60 W', '8595680412013', 'Kabely', 199, 62, 24, 'ks'],
@@ -58,13 +59,17 @@
         eet_rezim: 'playground', eet_eic: 'CZ00000019', eet_id_jednotky: '303', eet_id_pokl: 'DEMO-1', eet_cert_cesta: '(demo)', eet_cert_heslo: '',
         eet_timeout_s: '3', vychozi_marze_pct: '40', ai_api_klic: '', ai_model: 'claude-opus-5-5',
         zaloha_heslo: '', zaloha_cas: '21:30', zaloha_slozka: '', zaloha_rclone_cil: '', zaloha_ponechat_lokalne: '14', zaloha_ponechat_venku: '60', zaloha_nazev: '',
+        faktura_rada: 'FV', faktura_ucet: '123456789/9999', faktura_splatnost_dni: '14', faktura_pata: 'DEMO – neplatný doklad',
+        smtp_server: '', smtp_port: '587', smtp_zabezpeceni: 'STARTTLS', smtp_uzivatel: '', smtp_heslo: '', smtp_odesilatel: '', uzaverka_prijemci: '', uzaverka_auto_cas: '',
       },
       uzivatele: [
         { id: 1, jmeno: 'Šéf (demo)', pin: '1234', role: 'SPRAVCE', aktivni: 1, vytvoreno: ted() },
         { id: 2, jmeno: 'Prodavač (demo)', pin: '1111', role: 'PRODAVAC', aktivni: 1, vytvoreno: ted() },
       ],
       zbozi: [], eany: {}, prodeje: [], polozky: [], prijemky: [], prijemka_polozky: [], pohyby: [], dodavatel_kody: {},
+      odberatele: [], faktury: [], faktura_polozky: [],
     };
+    db.dalsi.odberatel = 1; db.dalsi.faktura = 1; db.dalsi.fpol = 1;
     for (const [nazev, ean, kat, cena, nakup, stav, jed] of ZBOZI) {
       const id = db.dalsi.zbozi++;
       db.zbozi.push({ id, nazev, kod: null, kategorie: kat, cena: cena * 100, sazba_dph: 21, nakupni_cena: nakup * 100, jednotka: jed,
@@ -76,6 +81,12 @@
     db.relace = 2;
     prodej(db, { platba: 'HOTOVE', prijato: 100000, polozky: [{ zbozi_id: 1, mnozstvi: 2 }, { zbozi_id: 5, mnozstvi: 1 }] });
     prodej(db, { platba: 'KARTA', polozky: [{ zbozi_id: 13, mnozstvi: 1 }] });
+    // Ukázkový kontakt a dvě faktury převodem: jedna po splatnosti, jedna uhrazená.
+    const o = { id: db.dalsi.odberatel++, nazev: 'Ukázková firma s.r.o.', ico: '12345678', dic: 'CZ12345678', ulice: 'Náměstí 1', psc: '408 01', mesto: 'Rumburk', email: 'nakup@example.com', telefon: null, poznamka: null, vytvoreno: ted(), upraveno: ted() };
+    db.odberatele.push(o);
+    const pred = (dni) => { const d = new Date(); d.setDate(d.getDate() - dni); return d.toISOString().slice(0, 10); };
+    fakturaPrevodem(db, o, [{ zbozi_id: 9, mnozstvi: 2 }, { zbozi_id: 10, mnozstvi: 2 }], pred(20), null);
+    fakturaPrevodem(db, o, [{ zbozi_id: 12, mnozstvi: 3 }], pred(10), pred(3));
     db.relace = null;
     return db;
   }
@@ -114,7 +125,8 @@
 
   function prodejDict(p) {
     const u = DB.uzivatele.find((x) => x.id === p.uzivatel_id);
-    return { ...p, prodavac: u ? u.jmeno : null, eet_varovani: [], polozky: DB.polozky.filter((i) => i.prodej_id === p.id) };
+    const f = (DB.faktury || []).find((x) => x.prodej_id === p.id);
+    return { ...p, prodavac: u ? u.jmeno : null, eet_varovani: [], polozky: DB.polozky.filter((i) => i.prodej_id === p.id), faktura: f ? { id: f.id, cislo: f.cislo } : null };
   }
 
   function novaUctenka(db, data) {
@@ -162,6 +174,71 @@
     }
     eetOdesli(p);
     return p;
+  }
+
+  /* ------------------------------------------------------------------ vydané faktury */
+
+  function radkyDokladu(db, polozky) {
+    return polozky.filter((p) => p.mnozstvi).map((p) => {
+      if (p.zbozi_id != null) {
+        const z = db.zbozi.find((x) => x.id === p.zbozi_id); if (!z) throw new Chyba(400, `Zboží ${p.zbozi_id} neexistuje`);
+        const cena = p.cena == null ? z.cena : p.cena;
+        return { zbozi_id: z.id, nazev: z.nazev, mnozstvi: p.mnozstvi, jednotka: z.jednotka, cena, sazba_dph: z.sazba_dph, celkem: Math.round(cena * p.mnozstvi) };
+      }
+      if (!p.nazev || p.cena == null) throw new Chyba(400, 'Položka mimo katalog potřebuje název a cenu');
+      return { zbozi_id: null, nazev: p.nazev, mnozstvi: p.mnozstvi, jednotka: 'ks', cena: p.cena, sazba_dph: p.sazba_dph ?? 21, celkem: Math.round(p.cena * p.mnozstvi) };
+    });
+  }
+  const plus = (iso, n) => { const d = new Date(iso + 'T12:00:00'); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
+  const adresa = (o) => [o.ulice, [o.psc, o.mesto].filter(Boolean).join(' ')].filter(Boolean).join(', ') || null;
+
+  function novaFaktura(db, o, data) {
+    const rok = data.vystaveni.slice(0, 4);
+    const cislo = `${db.nastaveni.faktura_rada || 'FV'}${rok}${String(dalsiCislo(db, 'faktura-' + rok)).padStart(4, '0')}`;
+    const f = { id: db.dalsi.faktura++, cislo, vs: cislo.replace(/\D/g, '').slice(-10), odberatel_id: o.id || null, odb_nazev: o.nazev, odb_ico: o.ico || null, odb_dic: o.dic || null,
+      odb_adresa: adresa(o), odb_email: o.email || null, datum_vystaveni: data.vystaveni, duzp: data.duzp || data.vystaveni,
+      splatnost: data.splatnost || plus(data.vystaveni, +db.nastaveni.faktura_splatnost_dni || 14), forma_uhrady: data.forma, poznamka: data.poznamka || null,
+      celkem: data.radky.reduce((s, r) => s + r.celkem, 0), stav: data.stav, datum_uhrady: data.uhrazeno || null, prodej_id: data.prodej_id || null,
+      uzivatel_id: db.relace, vytvoreno: ted(), odeslano: null };
+    db.faktury.push(f);
+    data.radky.forEach((r) => db.faktura_polozky.push({ id: db.dalsi.fpol++, faktura_id: f.id, ...r }));
+    return f;
+  }
+
+  function fakturaPrevodem(db, o, polozky, vystaveni, uhrazeno) {
+    const radky = radkyDokladu(db, polozky);
+    const f = novaFaktura(db, o, { vystaveni, forma: 'PREVOD', radky, stav: uhrazeno ? 'UHRAZENO' : 'NEUHRAZENO', uhrazeno });
+    radky.forEach((r) => { if (r.zbozi_id != null) pohyb(db, r.zbozi_id, -r.mnozstvi, 'PRODEJ', f.cislo, db.relace, 'faktura'); });
+    return f;
+  }
+
+  function rekap(polozky) {
+    const m = {}; polozky.forEach((p) => { m[p.sazba_dph] = (m[p.sazba_dph] || 0) + p.celkem; });
+    return Object.keys(m).sort((a, b) => b - a).map((s) => { const c = m[s]; const z = Math.round(c / (1 + s / 100)); return { sazba: +s, zaklad: z, dph: c - z, celkem: c }; });
+  }
+
+  function ibanZUctu(ucet) {
+    const m = String(ucet || '').replace(/\s/g, '').match(/^(?:(\d{1,6})-)?(\d{2,10})\/(\d{4})$/);
+    if (!m) return null;
+    const bban = m[3] + (m[1] || '').padStart(6, '0') + m[2].padStart(10, '0');
+    return 'CZ' + String(98 - [...(bban + '123500')].reduce((r, c) => (r * 10 + +c) % 97, 0)).padStart(2, '0') + bban;
+  }
+
+  function fakturaDict(f) {
+    const polozky = DB.faktura_polozky.filter((p) => p.faktura_id === f.id);
+    const p = f.prodej_id ? DB.prodeje.find((x) => x.id === f.prodej_id) : null;
+    const dnes = ted().slice(0, 10);
+    const iban = ibanZUctu(DB.nastaveni.faktura_ucet);
+    return { ...f, polozky, dph: rekap(polozky), vystavil: (DB.uzivatele.find((u) => u.id === f.uzivatel_id) || {}).jmeno || null, prodejka: p ? p.cislo : null,
+      po_splatnosti: f.stav === 'NEUHRAZENO' && f.splatnost < dnes, iban, qr: !!(iban && f.forma_uhrady === 'PREVOD' && f.stav === 'NEUHRAZENO') };
+  }
+
+  function ulozOdberatele(o) {
+    const pole = ['nazev', 'ico', 'dic', 'ulice', 'mesto', 'psc', 'email', 'telefon', 'poznamka'];
+    let z = o.id ? DB.odberatele.find((x) => x.id === o.id) : (o.ico ? DB.odberatele.find((x) => x.ico === o.ico) : null);
+    if (!z) { z = { id: DB.dalsi.odberatel++, vytvoreno: ted() }; DB.odberatele.push(z); }
+    pole.forEach((k) => { z[k] = (o[k] && String(o[k]).trim()) || null; }); z.upraveno = ted();
+    return z;
   }
 
   /* ------------------------------------------------------------------ faktury */
@@ -243,7 +320,8 @@
     ['GET', /^\/api\/stav$/, () => {
       const u = ja(); const n = DB.nastaveni;
       return { potreba_nastaveni: false, uzivatel: u ? { id: u.id, jmeno: u.jmeno, role: u.role } : null, eet_rezim: n.eet_rezim,
-        firma: Object.fromEntries(['firma_nazev', 'firma_ico', 'firma_dic', 'firma_adresa', 'provozovna', 'telefon', 'platce_dph', 'zaokrouhlovat_hotovost', 'uctenka_paticka'].map((k) => [k, n[k]])) };
+        firma: Object.fromEntries(['firma_nazev', 'firma_ico', 'firma_dic', 'firma_adresa', 'provozovna', 'telefon', 'platce_dph', 'zaokrouhlovat_hotovost', 'uctenka_paticka',
+          'faktura_ucet', 'faktura_pata', 'faktura_splatnost_dni'].map((k) => [k, n[k]])) };
     }],
     ['POST', /^\/api\/prihlaseni$/, (m, q, b) => {
       const u = DB.uzivatele.find((x) => x.aktivni && x.pin === String(b.pin));
@@ -417,6 +495,80 @@
       return { ok: true };
     }],
 
+    ['GET', /^\/api\/odberatele$/, (m, q) => {
+      prihlasen(); const t = norm((q.get('q') || '').trim());
+      return DB.odberatele.filter((o) => !t || norm(o.nazev).includes(t) || (o.ico || '').startsWith(t) || norm(o.mesto).includes(t))
+        .map((o) => ({ ...o, faktur: DB.faktury.filter((f) => f.odberatel_id === o.id && f.stav !== 'STORNO').length,
+          dluzi: DB.faktury.filter((f) => f.odberatel_id === o.id && f.stav === 'NEUHRAZENO').reduce((s, f) => s + f.celkem, 0) }))
+        .sort((a, b) => a.nazev.localeCompare(b.nazev, 'cs'));
+    }],
+    ['POST', /^\/api\/odberatele$/, (m, q, b) => { prihlasen(); if (!b.nazev) throw new Chyba(422, 'Vyplňte název'); return ulozOdberatele(b); }],
+    ['GET', /^\/api\/ares\/(\d+)$/, async (m) => {
+      prihlasen(); const ico = m[1].padStart(8, '0');
+      let d;
+      try { d = await (await puvodniFetch(`https://ares.gov.cz/ekonomicke-subjekty-v-be/rest/ekonomicke-subjekty/${ico}`)).json(); }
+      catch { throw new Chyba(502, 'ARES teď neodpovídá, vyplňte údaje ručně'); }
+      if (!d.obchodniJmeno) throw new Chyba(404, `IČO ${ico} v ARES není`);
+      const s = d.sidlo || {};
+      const cislo = [s.cisloDomovni, s.cisloOrientacni].filter(Boolean).join('/') + (s.cisloOrientacniPismeno || '');
+      return { nazev: d.obchodniJmeno, ico, dic: d.dic || null, ulice: [s.nazevUlice || s.nazevCastiObce, cislo].filter(Boolean).join(' '),
+        mesto: s.nazevObce || null, psc: String(s.psc || '').replace(/^(\d{3})(\d{2})$/, '$1 $2') };
+    }],
+    ['GET', /^\/api\/faktury-vydane$/, (m, q) => {
+      prihlasen(); const dnes = ted().slice(0, 10); const filtr = q.get('filtr') || 'vse'; const t = norm((q.get('q') || '').trim());
+      let r = DB.faktury.slice().reverse();
+      if (filtr === 'neuhrazene') r = r.filter((f) => f.stav === 'NEUHRAZENO');
+      if (filtr === 'po_splatnosti') r = r.filter((f) => f.stav === 'NEUHRAZENO' && f.splatnost < dnes);
+      if (filtr === 'uhrazene') r = r.filter((f) => f.stav === 'UHRAZENO');
+      if (t) r = r.filter((f) => f.cislo.toLowerCase().includes(t) || norm(f.odb_nazev).includes(t) || (f.odb_ico || '').startsWith(t));
+      const nu = DB.faktury.filter((f) => f.stav === 'NEUHRAZENO'); const ps = nu.filter((f) => f.splatnost < dnes);
+      return { faktury: r.map((f) => ({ ...f, po_splatnosti: f.stav === 'NEUHRAZENO' && f.splatnost < dnes })),
+        souhrn: { neuhrazeno: nu.reduce((s, f) => s + f.celkem, 0), po_splatnosti: ps.reduce((s, f) => s + f.celkem, 0), pocet_po_splatnosti: ps.length,
+          mesic: DB.faktury.filter((f) => f.stav !== 'STORNO' && f.datum_vystaveni.startsWith(dnes.slice(0, 7))).reduce((s, f) => s + f.celkem, 0) } };
+    }],
+    ['GET', /^\/api\/faktury-vydane\/(\d+)$/, (m) => { prihlasen(); const f = DB.faktury.find((x) => x.id === +m[1]); if (!f) throw new Chyba(404, 'Faktura nenalezena'); return fakturaDict(f); }],
+    ['POST', /^\/api\/faktury-vydane$/, (m, q, b) => {
+      const u = prihlasen(); const dnes = ted().slice(0, 10);
+      const o = { ...b.odberatel }; if (!o.nazev) throw new Chyba(422, 'Vyplňte odběratele');
+      const ulozeny = b.ulozit_kontakt === false ? o : ulozOdberatele(o);
+      const zaklad = { vystaveni: b.datum_vystaveni || dnes, duzp: b.duzp, splatnost: b.splatnost, poznamka: b.poznamka };
+      let f;
+      if (b.prodej_id) {
+        const p = DB.prodeje.find((x) => x.id === b.prodej_id);
+        if (!p || p.typ !== 'PRODEJ' || p.stornovano) throw new Chyba(400, 'K této prodejce nejde fakturu vystavit');
+        if (DB.faktury.some((x) => x.prodej_id === p.id)) throw new Chyba(409, 'K této prodejce už faktura existuje');
+        const radky = DB.polozky.filter((i) => i.prodej_id === p.id).map(({ zbozi_id, nazev, mnozstvi, cena, sazba_dph, celkem }) => ({ zbozi_id, nazev, mnozstvi, jednotka: null, cena, sazba_dph, celkem }));
+        if (p.zaokrouhleni) radky.push({ zbozi_id: null, nazev: 'Zaokrouhlení', mnozstvi: 1, jednotka: null, cena: p.zaokrouhleni, sazba_dph: 0, celkem: p.zaokrouhleni });
+        f = novaFaktura(DB, { ...ulozeny, id: ulozeny.id }, { ...zaklad, duzp: p.cas.slice(0, 10), forma: p.platba, radky, stav: 'UHRAZENO', uhrazeno: p.cas.slice(0, 10), prodej_id: p.id });
+      } else if (b.forma_uhrady === 'HOTOVE' || b.forma_uhrady === 'KARTA') {
+        const p = prodej(DB, { platba: b.forma_uhrady, prijato: b.prijato, polozky: b.polozky });
+        const radky = DB.polozky.filter((i) => i.prodej_id === p.id).map(({ zbozi_id, nazev, mnozstvi, cena, sazba_dph, celkem }) => ({ zbozi_id, nazev, mnozstvi, jednotka: null, cena, sazba_dph, celkem }));
+        if (p.zaokrouhleni) radky.push({ zbozi_id: null, nazev: 'Zaokrouhlení', mnozstvi: 1, jednotka: null, cena: p.zaokrouhleni, sazba_dph: 0, celkem: p.zaokrouhleni });
+        f = novaFaktura(DB, ulozeny, { ...zaklad, forma: b.forma_uhrady, radky, stav: 'UHRAZENO', uhrazeno: dnes, prodej_id: p.id });
+      } else {
+        const radky = radkyDokladu(DB, b.polozky || []);
+        if (!radky.length) throw new Chyba(400, 'Faktura nemá žádnou položku');
+        f = novaFaktura(DB, ulozeny, { ...zaklad, forma: b.forma_uhrady, radky, stav: 'NEUHRAZENO' });
+        radky.forEach((r) => { if (r.zbozi_id != null) pohyb(DB, r.zbozi_id, -r.mnozstvi, 'PRODEJ', f.cislo, u.id, 'faktura'); });
+      }
+      return fakturaDict(f);
+    }],
+    ['POST', /^\/api\/faktury-vydane\/(\d+)\/uhrada$/, (m, q, b) => {
+      prihlasen(); const f = DB.faktury.find((x) => x.id === +m[1]); if (!f) throw new Chyba(404, 'Faktura nenalezena');
+      if (f.stav === 'STORNO' || f.prodej_id) throw new Chyba(409, 'U této faktury nejde úhradu měnit');
+      if (b.uhrazeno === false) Object.assign(f, { stav: 'NEUHRAZENO', datum_uhrady: null }); else Object.assign(f, { stav: 'UHRAZENO', datum_uhrady: b.datum || ted().slice(0, 10) });
+      return fakturaDict(f);
+    }],
+    ['POST', /^\/api\/faktury-vydane\/(\d+)\/storno$/, (m) => {
+      const u = prihlasen(); const f = DB.faktury.find((x) => x.id === +m[1]); if (!f) throw new Chyba(404, 'Faktura nenalezena');
+      if (f.stav !== 'NEUHRAZENO' || f.prodej_id) throw new Chyba(409, 'Stornovat jde jen neuhrazenou fakturu převodem. Zaplacenou vraťte stornem prodejky.');
+      DB.faktura_polozky.filter((p) => p.faktura_id === f.id && p.zbozi_id != null).forEach((p) => pohyb(DB, p.zbozi_id, p.mnozstvi, 'STORNO', f.cislo, u.id, 'storno faktury'));
+      f.stav = 'STORNO'; return fakturaDict(f);
+    }],
+    ['POST', /^\/api\/faktury-vydane\/(\d+)\/odeslat$/, () => { throw new Chyba(400, 'V demu se e-maily neodesílají.'); }],
+    ['POST', /^\/api\/uzaverka\/odeslat$/, () => { prihlasen(); throw new Chyba(400, 'V demu se e-maily neodesílají – ve skutečné pokladně odejde uzávěrka se souhrnem a měsíčním Excelem.'); }],
+    ['POST', /^\/api\/email\/test$/, () => { spravce(); throw new Chyba(400, 'V demu se e-maily neodesílají.'); }],
+
     ['GET', /^\/api\/zaloha\/stav$/, () => { spravce(); return { posledni: null, lokalni: [], rclone: false, varovani: false }; }],
     ['POST', /^\/api\/zaloha$/, () => { spravce(); throw new Chyba(400, 'V demu se nezálohuje – data jsou jen ve vašem prohlížeči.'); }],
   ];
@@ -439,7 +591,7 @@
       const telo = init.body ? JSON.parse(init.body) : {};
       for (const [m, re, fn] of routes) {
         const shoda = m === metoda && cesta.match(re);
-        if (shoda) { const v = fn(shoda, url.searchParams, telo); uloz(); return json(v === undefined ? {} : v, 200); }
+        if (shoda) { const v = await fn(shoda, url.searchParams, telo); uloz(); return json(v === undefined ? {} : v, 200); }
       }
       return json({ detail: 'Not Found' }, 404);
     } catch (e) {
