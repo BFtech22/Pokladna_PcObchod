@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import logging
+import re
 import secrets
 import sqlite3
 from contextlib import asynccontextmanager
+from datetime import datetime
 
 from pathlib import Path
 from typing import List, Optional
@@ -16,7 +20,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import db
+from . import db, faktury
 from .eet_fronta import sluzba as eet
 
 log = logging.getLogger("pokladna")
@@ -436,28 +440,35 @@ def eet_test(u=Depends(spravce)):
 
 class PolozkaPrijemky(BaseModel):
     zbozi_id: int
-    mnozstvi: float
+    mnozstvi: float = Field(gt=0, le=99999)
     nakupni_cena: Optional[int] = Field(default=None, ge=0)   # bez DPH za jednotku
+    kod_dodavatele: Optional[str] = None                      # z faktury – uloží se naučené párování
+    ean_z_faktury: Optional[str] = None                       # z faktury – doplní se ke zboží, když ho nemá
+    koeficient: float = Field(default=1, gt=0)
 
 
 class PrijemkaVstup(BaseModel):
     dodavatel: Optional[str] = None
+    dodavatel_ico: Optional[str] = None
     doklad: Optional[str] = None
     poznamka: Optional[str] = None
+    soubor_id: Optional[int] = None
     polozky: List[PolozkaPrijemky] = Field(min_length=1)
 
 
 @app.post("/api/prijemky")
 def nova_prijemka(data: PrijemkaVstup, u=Depends(spravce), con: sqlite3.Connection = Depends(con_dep)):
+    dod = faktury.klic_dodavatele(data.dodavatel_ico, data.dodavatel)
     with db.transakce(con):
         cas = db.ted()
         rok = cas[:4]
         cislo = f"P{rok}-{db.dalsi_cislo(con, 'prijemka-' + rok):05d}"
         celkem = sum(int(round((p.nakupni_cena or 0) * p.mnozstvi)) for p in data.polozky)
         prid = con.execute(
-            "INSERT INTO prijemky (cislo, cas, uzivatel_id, dodavatel, doklad, poznamka, celkem_bez_dph) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (cislo, cas, u["id"], data.dodavatel, data.doklad, data.poznamka, celkem)).lastrowid
+            "INSERT INTO prijemky (cislo, cas, uzivatel_id, dodavatel, dodavatel_ico, doklad, poznamka, celkem_bez_dph, soubor_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (cislo, cas, u["id"], data.dodavatel, data.dodavatel_ico, data.doklad, data.poznamka, celkem,
+             data.soubor_id)).lastrowid
         for p in data.polozky:
             if not con.execute("SELECT 1 FROM zbozi WHERE id = ?", (p.zbozi_id,)).fetchone():
                 raise HTTPException(400, f"Zboží {p.zbozi_id} neexistuje")
@@ -466,7 +477,73 @@ def nova_prijemka(data: PrijemkaVstup, u=Depends(spravce), con: sqlite3.Connecti
             db.pohyb(con, p.zbozi_id, p.mnozstvi, "PRIJEM", cislo, u["id"], data.doklad)
             if p.nakupni_cena is not None:
                 con.execute("UPDATE zbozi SET nakupni_cena = ? WHERE id = ?", (p.nakupni_cena, p.zbozi_id))
+            if p.kod_dodavatele and dod:
+                con.execute(
+                    "INSERT INTO dodavatel_kody (dodavatel, kod, zbozi_id, koeficient, upraveno) VALUES (?, ?, ?, ?, ?) "
+                    "ON CONFLICT(dodavatel, kod) DO UPDATE SET zbozi_id = excluded.zbozi_id, "
+                    "koeficient = excluded.koeficient, upraveno = excluded.upraveno",
+                    (dod, p.kod_dodavatele.strip(), p.zbozi_id, p.koeficient, cas))
+            if p.ean_z_faktury and faktury.platny_ean(p.ean_z_faktury):
+                con.execute("INSERT OR IGNORE INTO zbozi_ean (ean, zbozi_id) VALUES (?, ?)", (p.ean_z_faktury, p.zbozi_id))
+        if data.soubor_id:
+            con.execute("UPDATE faktury_soubory SET prijemka_id = ? WHERE id = ?", (prid, data.soubor_id))
     return {"id": prid, "cislo": cislo, "celkem_bez_dph": celkem}
+
+
+# --------------------------------------------------------------------------- faktury
+
+FAKTURY_DIR = db.DB_CESTA.parent / "faktury"
+MAX_FAKTURA = 25 * 1024 * 1024
+
+
+class FakturaVstup(BaseModel):
+    nazev: str = Field(min_length=1, max_length=255)
+    data: str                                   # obsah souboru v base64
+
+
+@app.post("/api/faktury/nacti")
+def nacti_fakturu(vstup: FakturaVstup, u=Depends(spravce), con: sqlite3.Connection = Depends(con_dep)):
+    try:
+        obsah = base64.b64decode(vstup.data, validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(400, "Soubor se nepodařilo přenést")
+    if len(obsah) > MAX_FAKTURA:
+        raise HTTPException(413, "Soubor je větší než 25 MB")
+    try:
+        f = faktury.nacti(vstup.nazev, obsah, db.nastaveni(con))
+    except faktury.ChybaFaktury as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        log.exception("Faktura %s", vstup.nazev)
+        raise HTTPException(400, f"Fakturu se nepodařilo přečíst ({type(e).__name__})")
+
+    FAKTURY_DIR.mkdir(parents=True, exist_ok=True)
+    bezpecny = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(vstup.nazev).name)[-80:]
+    cesta = FAKTURY_DIR / f"{datetime.now().strftime('%Y%m%d-%H%M%S')}_{secrets.token_hex(3)}_{bezpecny}"
+    cesta.write_bytes(obsah)
+    soubor_id = con.execute(
+        "INSERT INTO faktury_soubory (nazev, cesta, nahrano, zdroj, dodavatel, doklad) VALUES (?, ?, ?, ?, ?, ?)",
+        (vstup.nazev, str(cesta), db.ted(), f.zdroj, f.dodavatel, f.cislo)).lastrowid
+
+    duplicita = None
+    if f.cislo:
+        r = con.execute(
+            "SELECT cislo, cas FROM prijemky WHERE doklad = ? AND (dodavatel_ico = ? OR (? IS NULL AND dodavatel = ?)) "
+            "ORDER BY id DESC LIMIT 1", (f.cislo, f.dodavatel_ico, f.dodavatel_ico, f.dodavatel)).fetchone()
+        if r:
+            duplicita = dict(r)
+    vysledek = f.dict()
+    vysledek["polozky"] = faktury.sparuj(con, f)
+    return {"soubor_id": soubor_id, "faktura": vysledek, "duplicita": duplicita,
+            "marze_pct": float(db.nastaveni(con).get("vychozi_marze_pct") or 40)}
+
+
+@app.get("/api/faktury/{fid}/soubor")
+def soubor_faktury(fid: int, u=Depends(uzivatel), con: sqlite3.Connection = Depends(con_dep)):
+    r = con.execute("SELECT nazev, cesta FROM faktury_soubory WHERE id = ?", (fid,)).fetchone()
+    if r is None or not Path(r["cesta"]).is_file():
+        raise HTTPException(404, "Soubor faktury nenalezen")
+    return FileResponse(r["cesta"], filename=r["nazev"])
 
 
 @app.get("/api/prijemky")
@@ -525,12 +602,14 @@ def uzaverka(datum: Optional[str] = None, u=Depends(uzivatel), con: sqlite3.Conn
 # --------------------------------------------------------------------------- nastavení a uživatelé
 
 UPRAVITELNE = set(db.VYCHOZI_NASTAVENI)
+TAJNE = ("eet_cert_heslo", "ai_api_klic")   # do prohlížeče se posílají jen jako hvězdičky
 
 
 @app.get("/api/nastaveni")
 def cti_nastaveni(u=Depends(spravce), con: sqlite3.Connection = Depends(con_dep)):
     nast = db.nastaveni(con)
-    nast["eet_cert_heslo"] = "********" if nast.get("eet_cert_heslo") else ""
+    for k in TAJNE:
+        nast[k] = "********" if nast.get(k) else ""
     return nast
 
 
@@ -540,7 +619,7 @@ def uloz_nastaveni(data: dict, u=Depends(spravce), con: sqlite3.Connection = Dep
         raise HTTPException(400, "Neplatný režim EET")
     with db.transakce(con):
         for k, v in data.items():
-            if k not in UPRAVITELNE or (k == "eet_cert_heslo" and v == "********"):
+            if k not in UPRAVITELNE or (k in TAJNE and v == "********"):
                 continue
             con.execute("INSERT INTO nastaveni (klic, hodnota) VALUES (?, ?) "
                         "ON CONFLICT(klic) DO UPDATE SET hodnota = excluded.hodnota", (k, "" if v is None else str(v)))

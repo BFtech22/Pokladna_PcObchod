@@ -6,3 +6,4 @@ cryptography==50.0.2
 requests==2.32.5
 pypdf==6.21.2
 httpx==0.28.1
+anthropic==0.125.0

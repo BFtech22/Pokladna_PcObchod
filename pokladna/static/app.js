@@ -29,7 +29,7 @@ const S = {
   eetRezim: 'vypnuto',
   kosik: nactiLokalne('kosik', []),
   vratka: false,
-  prijem: nactiLokalne('prijem', { dodavatel: '', doklad: '', poznamka: '', polozky: [] }),
+  prijem: nactiLokalne('prijem', { dodavatel: '', dodavatel_ico: '', doklad: '', poznamka: '', soubor_id: null, polozky: [] }),
 };
 const spravce = () => S.uzivatel && S.uzivatel.role === 'SPRAVCE';
 
@@ -787,7 +787,9 @@ function inventura(z, poUlozeni) {
 
 function skladPrijem() {
   const P = S.prijem;
-  $('#sklad-obsah').innerHTML = `<div class="karta"><div class="hlav"><h2>Příjem zboží</h2><span class="mut2">Rozpracovaný příjem se průběžně ukládá v tomto prohlížeči.</span></div><div class="telo">
+  $('#sklad-obsah').innerHTML = `<div class="karta"><div class="hlav"><div><h2>Příjem zboží</h2><span class="mut2">Rozpracovaný příjem se průběžně ukládá v tomto prohlížeči.</span></div>
+    <div class="radek">${P.soubor_id ? `<a class="btn mala" href="/api/faktury/${P.soubor_id}/soubor" target="_blank">Otevřít fakturu</a>` : ''}
+      <label class="btn hl" id="p-faktura-btn">Nahrát fakturu (PDF / ISDOC)<input type="file" id="p-faktura" accept=".pdf,.isdoc,.isdocx,.xml" class="skryt"></label></div></div><div class="telo">
     <div class="mrizka"><label class="pole">Dodavatel<input type="text" id="p-dod" value="${esc(P.dodavatel)}"></label>
       <label class="pole">Číslo faktury / dodacího listu<input type="text" id="p-dok" value="${esc(P.doklad)}"></label>
       <label class="pole siroke">Poznámka<input type="text" id="p-pozn" value="${esc(P.poznamka)}"></label></div>
@@ -837,18 +839,22 @@ function skladPrijem() {
   };
   $('#p-zahodit').onclick = async () => {
     if (!P.polozky.length || await potvrd('Zahodit příjem', 'Smazat rozpracovaný příjem?', 'Zahodit', true)) {
-      S.prijem = { dodavatel: '', doklad: '', poznamka: '', polozky: [] }; ulozLokalne('prijem', S.prijem); skladPrijem();
+      S.prijem = prazdnyPrijem(); ulozLokalne('prijem', S.prijem); skladPrijem();
     }
   };
   $('#p-ulozit').onclick = async () => {
     if (!P.polozky.length) return toast('Příjem je prázdný');
     try {
-      const r = await api('POST', '/api/prijemky', { dodavatel: P.dodavatel || null, doklad: P.doklad || null, poznamka: P.poznamka || null,
-        polozky: P.polozky.map((x) => ({ zbozi_id: x.zbozi_id, mnozstvi: x.mnozstvi, nakupni_cena: x.nakupni_cena })) });
+      const r = await api('POST', '/api/prijemky', {
+        dodavatel: P.dodavatel || null, dodavatel_ico: P.dodavatel_ico || null, doklad: P.doklad || null,
+        poznamka: P.poznamka || null, soubor_id: P.soubor_id || null,
+        polozky: P.polozky.map((x) => ({ zbozi_id: x.zbozi_id, mnozstvi: x.mnozstvi, nakupni_cena: x.nakupni_cena,
+          kod_dodavatele: x.kod_dodavatele || null, ean_z_faktury: x.ean_z_faktury || null, koeficient: x.koeficient || 1 })) });
       toast(`Naskladněno – příjemka ${r.cislo}`, 'ok');
-      S.prijem = { dodavatel: '', doklad: '', poznamka: '', polozky: [] }; ulozLokalne('prijem', S.prijem); skladPrijem();
+      S.prijem = prazdnyPrijem(); ulozLokalne('prijem', S.prijem); skladPrijem();
     } catch (e) { chyba(e); }
   };
+  $('#p-faktura').onchange = (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) nahratFakturu(f); };
   vykresli();
   sken.focus();
 }
@@ -858,9 +864,165 @@ async function skladPrijemky() {
   try {
     const rows = await api('GET', '/api/prijemky');
     $('#pr-seznam').innerHTML = rows.length ? `<table class="tab"><thead><tr><th>Datum</th><th>Číslo</th><th>Dodavatel</th><th>Doklad</th><th class="num">Položek</th><th class="num">Celkem bez DPH</th><th>Přijal</th></tr></thead><tbody>
-      ${rows.map((p) => `<tr><td>${datumCas(p.cas)}</td><td class="mono">${esc(p.cislo)}</td><td>${esc(p.dodavatel || '')}</td><td class="mono">${esc(p.doklad || '')}</td><td class="num">${p.pocet}</td><td class="num">${kc(p.celkem_bez_dph)}</td><td>${esc(p.uzivatel || '')}</td></tr>`).join('')}</tbody></table>`
+      ${rows.map((p) => `<tr><td>${datumCas(p.cas)}</td><td class="mono">${esc(p.cislo)}</td><td>${esc(p.dodavatel || '')}</td>
+        <td class="mono">${p.soubor_id ? `<a href="/api/faktury/${p.soubor_id}/soubor" target="_blank">${esc(p.doklad || 'faktura')}</a>` : esc(p.doklad || '')}</td>
+        <td class="num">${p.pocet}</td><td class="num">${kc(p.celkem_bez_dph)}</td><td>${esc(p.uzivatel || '')}</td></tr>`).join('')}</tbody></table>`
       : '<div class="prazdno">Zatím žádné příjemky</div>';
   } catch (e) { chyba(e); }
+}
+
+/* ======================================================================== faktury */
+
+const prazdnyPrijem = () => ({ dodavatel: '', dodavatel_ico: '', doklad: '', poznamka: '', soubor_id: null, polozky: [] });
+const ZDROJE = {
+  isdoc: ['ok', 'ISDOC – přesná data'], 'pdf-isdoc': ['ok', 'PDF s vloženým ISDOC – přesná data'],
+  ai: ['info', 'PDF přečetl Claude – zkontrolujte'], text: ['ceka', 'Odhad z textu PDF – zkontrolujte'],
+};
+
+function nahratFakturu(soubor) {
+  const ctecka = new FileReader();
+  ctecka.onload = async () => {
+    const data = String(ctecka.result).split(',')[1] || '';
+    const btn = $('#p-faktura-btn');
+    if (btn) { btn.classList.add('skryt'); btn.insertAdjacentHTML('afterend', '<span class="mut" id="p-nacitam">Načítám fakturu…</span>'); }
+    try { kontrolaFaktury(await api('POST', '/api/faktury/nacti', { nazev: soubor.name, data })); }
+    catch (e) { chyba(e); }
+    finally { $('#p-nacitam')?.remove(); btn?.classList.remove('skryt'); }
+  };
+  ctecka.onerror = () => toast('Soubor nejde přečíst', 'chyba');
+  ctecka.readAsDataURL(soubor);
+}
+
+// U fakturovaného balení zkusí z názvu vyčíst počet kusů: „Sklo (bal. 10 ks)“ → 10.
+function kusyVBaleni(p) {
+  if (!/bal|pack|sad|krab/i.test(p.jednotka || '') && !/bal\.|balení/i.test(p.nazev)) return 1;
+  const m = p.nazev.match(/(\d{1,4})\s*(?:ks|kus)/i);
+  return m ? +m[1] : 1;
+}
+
+function navrhCeny(r, marze) {
+  if (r.cena_bez_dph == null) return null;
+  const sazba = r.nove.sazba;
+  const nakupKs = r.cena_bez_dph / (r.koeficient || 1);
+  return Math.ceil(nakupKs * (1 + marze / 100) * (1 + sazba / 100) / 100) * 100;
+}
+
+function kontrolaFaktury(v) {
+  const f = v.faktura;
+  const radky = f.polozky.map((p, i) => {
+    const r = { ...p, i, zbozi_id: p.navrh ? p.navrh.zbozi_id : null, zbozi: p.zbozi, zpusob: p.navrh ? p.navrh.zpusob : null,
+      koeficient: p.navrh && p.navrh.koeficient !== 1 ? p.navrh.koeficient : kusyVBaleni(p), nove: { nazev: p.nazev, sazba: p.sazba_dph ?? 21, cena: null } };
+    r.nove.cena = navrhCeny(r, v.marze_pct);
+    return r;
+  });
+  const [tz, tt] = ZDROJE[f.zdroj] || ['sedy', f.zdroj];
+  const o = okno({
+    titul: 'Kontrola faktury', siroke: true,
+    obsah: `<div class="radek mezera" style="margin-bottom:10px">
+        <div><strong style="font-size:16px">${esc(f.dodavatel || 'Neznámý dodavatel')}</strong>${f.dodavatel_ico ? ` <span class="mut">IČO ${esc(f.dodavatel_ico)}</span>` : ''}
+        <div class="mut">Doklad ${esc(f.cislo || '—')}${f.datum ? ' · ' + esc(f.datum) : ''}${f.celkem_bez_dph ? ' · celkem bez DPH ' + kc(f.celkem_bez_dph) : ''}</div></div>
+        <span class="stitek ${tz}">${esc(tt)}</span></div>
+      ${v.duplicita ? `<div class="upozorneni chyba">Tahle faktura už byla naskladněna: příjemka ${esc(v.duplicita.cislo)} z ${datumCas(v.duplicita.cas)}.</div>` : ''}
+      ${f.dobropis ? '<div class="upozorneni chyba">Jde o dobropis. Vrácené zboží odečtěte ze skladu inventurou, příjem se tu nedělá.</div>' : ''}
+      ${f.varovani.map((x) => `<div class="upozorneni">${esc(x)}</div>`).join('')}
+      <div style="overflow:auto"><table class="tab" id="kf"><thead><tr><th>Na faktuře</th><th class="num">Množství</th><th class="num">Cena/MJ bez DPH</th><th style="width:150px">Co udělat</th><th>Zboží v pokladně</th><th style="width:150px">Kusů v MJ</th></tr></thead><tbody></tbody></table></div>`,
+    pata: '<span class="mut" id="kf-souhrn"></span><span class="vypln"></span><button class="btn" data-zpet>Zrušit</button><button class="btn hl" data-ok>Převzít do příjmu</button>',
+  });
+  o.el.querySelector('.okno').style.maxWidth = '1240px';
+
+  const ZPUSOBY = { EAN: 'ok', 'naučené': 'ok', 'kód': 'ok', 'název': 'ceka', 'ručně': 'info', 'nové': 'info' };
+  const bunkaZbozi = (r) => {
+    if (r.akce === 'PRESKOCIT') return '<span class="mut2">nenaskladní se</span>';
+    if (r.akce === 'NOVE') {
+      return `<div class="radek" style="flex-wrap:nowrap"><input type="text" data-a="nn" value="${esc(r.nove.nazev)}" style="min-width:220px">
+        <input type="text" inputmode="decimal" data-a="nc" value="${r.nove.cena == null ? '' : cislo2(r.nove.cena)}" style="width:100px" title="Prodejní cena s DPH">
+        <select data-a="nd" style="width:72px">${[21, 12, 0].map((s) => `<option ${s === r.nove.sazba ? 'selected' : ''}>${s}</option>`).join('')}</select></div>
+        <div class="mut2">prodejní cena s DPH (návrh: marže ${v.marze_pct} %)${r.ean ? ' · EAN ' + esc(r.ean) : ''}</div>`;
+    }
+    const volby = [];
+    if (r.zbozi_id && !r.kandidati.some((k) => k.zbozi_id === r.zbozi_id)) volby.push({ zbozi_id: r.zbozi_id, nazev: r.zbozi ? r.zbozi.nazev : '#' + r.zbozi_id });
+    volby.push(...r.kandidati);
+    const z = r.zbozi;
+    let info = '';
+    if (z && z.id === r.zbozi_id && r.cena_bez_dph != null) {
+      const nakup = r.cena_bez_dph / (r.koeficient || 1); const bez = z.cena / (1 + z.sazba_dph / 100);
+      const m = nakup ? Math.round((bez - nakup) / nakup * 100) : null;
+      info = `<div class="mut2">skladem ${mn(z.stav)} · prodej ${kc(z.cena)}${m != null ? ` · marže <strong style="color:${m < 10 ? 'var(--chyba)' : 'inherit'}">${m} %</strong>` : ''}</div>`;
+    }
+    return `<div class="radek" style="flex-wrap:nowrap">${r.zpusob ? `<span class="stitek ${ZPUSOBY[r.zpusob] || 'sedy'}">${esc(r.zpusob)}</span>` : ''}
+      <select data-a="z" style="min-width:240px">${volby.length ? '' : '<option value="">— vyberte —</option>'}${volby.map((k) => `<option value="${k.zbozi_id}" ${k.zbozi_id === r.zbozi_id ? 'selected' : ''}>${esc(k.nazev)}${k.jistota && k.jistota < 1 ? ` (${Math.round(k.jistota * 100)} %)` : ''}</option>`).join('')}</select>
+      <button class="btn mala" data-a="hledat">Jiné…</button></div>${info}`;
+  };
+  const vykresli = () => {
+    $('#kf tbody', o.el).innerHTML = radky.map((r) => `<tr data-i="${r.i}" style="${r.akce === 'PRESKOCIT' ? 'opacity:.55' : ''}">
+      <td><strong>${esc(r.nazev)}</strong><div class="mut2">${[r.kod_dodavatele && 'kód ' + esc(r.kod_dodavatele), r.ean && 'EAN ' + esc(r.ean), r.sazba_dph != null && r.sazba_dph + ' %'].filter(Boolean).join(' · ')}</div></td>
+      <td class="num">${mn(r.mnozstvi)} ${esc(r.jednotka || '')}</td><td class="num">${kc(r.cena_bez_dph)}</td>
+      <td><select data-a="akce"><option value="PRIJMOUT" ${r.akce === 'PRIJMOUT' ? 'selected' : ''}>Naskladnit</option><option value="NOVE" ${r.akce === 'NOVE' ? 'selected' : ''}>Založit nové</option><option value="PRESKOCIT" ${r.akce === 'PRESKOCIT' ? 'selected' : ''}>Přeskočit</option></select></td>
+      <td>${bunkaZbozi(r)}</td>
+      <td>${r.akce === 'PRESKOCIT' ? '' : `<div class="radek" style="flex-wrap:nowrap">× <input type="text" inputmode="decimal" data-a="k" value="${mn(r.koeficient)}" style="width:64px"> <span class="mut2">= ${mn(r.mnozstvi * r.koeficient)}</span></div>`}</td></tr>`).join('');
+    const n = (a) => radky.filter((r) => r.akce === a).length;
+    $('#kf-souhrn', o.el).textContent = `Naskladní se ${n('PRIJMOUT') + n('NOVE')} položek, z toho ${n('NOVE')} nových, přeskočí se ${n('PRESKOCIT')}.`;
+    $$('#kf tbody tr', o.el).forEach((tr) => {
+      const r = radky[+tr.dataset.i];
+      $('[data-a=akce]', tr).onchange = (e) => { r.akce = e.target.value; vykresli(); };
+      const z = $('[data-a=z]', tr);
+      if (z) z.onchange = () => { r.zbozi_id = +z.value || null; r.zpusob = 'ručně'; r.zbozi = null; vykresli(); };
+      const h = $('[data-a=hledat]', tr);
+      if (h) h.onclick = () => vyberZbozi(r.nazev, (zb) => { r.zbozi_id = zb.id; r.zbozi = zb; r.zpusob = 'ručně'; if (!r.kandidati.some((k) => k.zbozi_id === zb.id)) r.kandidati.unshift({ zbozi_id: zb.id, nazev: zb.nazev }); vykresli(); });
+      const k = $('[data-a=k]', tr);
+      if (k) k.onchange = () => { const q = parseMn(k.value); if (Number.isFinite(q) && q > 0) { r.koeficient = q; r.nove.cena = navrhCeny(r, v.marze_pct); } vykresli(); };
+      const nn = $('[data-a=nn]', tr); if (nn) nn.oninput = () => { r.nove.nazev = nn.value; };
+      const nc = $('[data-a=nc]', tr); if (nc) nc.onchange = () => { r.nove.cena = parseKc(nc.value); };
+      const nd = $('[data-a=nd]', tr); if (nd) nd.onchange = () => { r.nove.sazba = +nd.value; r.nove.cena = navrhCeny(r, v.marze_pct); vykresli(); };
+    });
+  };
+  vykresli();
+  $('[data-zpet]', o.el).onclick = () => o.zavri();
+  $('[data-ok]', o.el).onclick = async (e) => {
+    const chybne = radky.find((r) => (r.akce === 'PRIJMOUT' && !r.zbozi_id) || (r.akce === 'NOVE' && (!r.nove.nazev.trim() || !Number.isFinite(r.nove.cena) || r.nove.cena == null)));
+    if (chybne) return toast(`Doplňte řádek „${chybne.nazev}“ – vyberte zboží nebo vyplňte název a cenu`, 'chyba');
+    e.target.disabled = true;
+    try {
+      for (const r of radky.filter((x) => x.akce === 'NOVE')) {
+        const z = await api('POST', '/api/zbozi', { nazev: r.nove.nazev.trim(), cena: r.nove.cena, sazba_dph: r.nove.sazba,
+          nakupni_cena: r.cena_bez_dph == null ? null : Math.round(r.cena_bez_dph / r.koeficient), eany: r.ean ? [r.ean] : [], pocatecni_stav: 0 });
+        Object.assign(r, { akce: 'PRIJMOUT', zbozi_id: z.id, zbozi: z, zpusob: 'nové' });   // při chybě dalšího řádku se znovu nezaloží
+      }
+      const P = S.prijem.polozky.length ? S.prijem : prazdnyPrijem();
+      Object.assign(P, { dodavatel: f.dodavatel || P.dodavatel, dodavatel_ico: f.dodavatel_ico || P.dodavatel_ico, doklad: f.cislo || P.doklad,
+        soubor_id: v.soubor_id, poznamka: P.poznamka || (f.datum ? `faktura ze dne ${f.datum}` : '') });
+      const detaily = await Promise.all(radky.filter((r) => r.akce === 'PRIJMOUT').map(async (r) => ({ r, z: r.zbozi && r.zbozi.eany ? r.zbozi : await api('GET', '/api/zbozi/' + r.zbozi_id) })));
+      for (const { r, z } of detaily) {
+        P.polozky.push({ zbozi_id: z.id, nazev: z.nazev, ean: (z.eany && z.eany[0]) || r.ean || null, stav: z.stav,
+          mnozstvi: Math.round(r.mnozstvi * r.koeficient * 1000) / 1000,
+          nakupni_cena: r.cena_bez_dph == null ? z.nakupni_cena : Math.round(r.cena_bez_dph / r.koeficient),
+          kod_dodavatele: r.kod_dodavatele, ean_z_faktury: r.ean, koeficient: r.koeficient });
+      }
+      S.prijem = P; ulozLokalne('prijem', P);
+      o.zavri(); skladPrijem();
+      toast('Položky z faktury jsou v příjmu. Zkontrolujte je a klikněte na Naskladnit.', 'ok');
+    } catch (er) { chyba(er); e.target.disabled = false; vykresli(); }
+  };
+}
+
+function vyberZbozi(text, poVyberu) {
+  const o = okno({
+    titul: 'Vybrat zboží',
+    obsah: `<input type="search" id="vz-q" value="${esc(text)}" autofocus><div id="vz-v" style="margin-top:10px;max-height:360px;overflow:auto"></div>`,
+    pata: '<button class="btn" data-zpet>Zpět</button>',
+  });
+  let casovac;
+  const hledej = async () => {
+    const rows = await api('GET', '/api/zbozi?limit=30&q=' + encodeURIComponent($('#vz-q', o.el).value.trim())).catch(() => []);
+    $('#vz-v', o.el).innerHTML = rows.map((z, i) => `<div class="pol" data-i="${i}" style="padding:9px 10px;border-bottom:1px solid var(--linka);cursor:pointer">
+      <strong>${esc(z.nazev)}</strong><div class="mut2">${esc(z.eany[0] || z.kod || '')} · skladem ${mn(z.stav)} · ${kc(z.cena)}</div></div>`).join('') || '<div class="prazdno">Nic nenalezeno</div>';
+    $$('#vz-v .pol', o.el).forEach((d) => { d.onclick = () => { o.zavri(); poVyberu(rows[+d.dataset.i]); }; });
+  };
+  $('#vz-q', o.el).oninput = () => { clearTimeout(casovac); casovac = setTimeout(hledej, 200); };
+  $('[data-zpet]', o.el).onclick = () => o.zavri();
+  // Hledání podle celého názvu z faktury bývá moc přísné – začne se prvními dvěma slovy.
+  $('#vz-q', o.el).value = text.split(/\s+/).slice(0, 2).join(' ');
+  hledej();
 }
 
 /* ======================================================================== uzávěrka */
@@ -910,8 +1072,10 @@ async function viewUzaverka() {
 function viewNastaveni(pod = 'firma') {
   if (!spravce()) { location.hash = '#prodej'; return; }
   $('#obsah').innerHTML = `<div class="zalozky"><a href="#nastaveni/firma" class="${pod === 'firma' ? 'aktivni' : ''}">Firma a účtenka</a>
-    <a href="#nastaveni/eet" class="${pod === 'eet' ? 'aktivni' : ''}">EET</a><a href="#nastaveni/uzivatele" class="${pod === 'uzivatele' ? 'aktivni' : ''}">Uživatelé</a></div><div id="n-obsah"></div>`;
+    <a href="#nastaveni/eet" class="${pod === 'eet' ? 'aktivni' : ''}">EET</a><a href="#nastaveni/faktury" class="${pod === 'faktury' ? 'aktivni' : ''}">Faktury</a>
+    <a href="#nastaveni/uzivatele" class="${pod === 'uzivatele' ? 'aktivni' : ''}">Uživatelé</a></div><div id="n-obsah"></div>`;
   if (pod === 'eet') return nastaveniEet();
+  if (pod === 'faktury') return nastaveniFaktury();
   if (pod === 'uzivatele') return nastaveniUzivatele();
   return nastaveniFirma();
 }
@@ -977,6 +1141,24 @@ async function nastaveniEet() {
           ${r.varovani && r.varovani.length ? '<br>' + r.varovani.map((x) => `Varování ${x[0]}: ${esc(x[1])}`).join('<br>') : ''}</div>`
         : `<div class="upozorneni chyba">Spojení nefunguje: ${esc(r.kod != null ? r.kod + ': ' : '')}${esc(r.text)}</div>`;
     } catch (e) { v.innerHTML = `<div class="upozorneni chyba">${esc(e.message)}</div>`; }
+  };
+}
+
+async function nastaveniFaktury() {
+  let n; try { n = await api('GET', '/api/nastaveni'); } catch (e) { return chyba(e); }
+  $('#n-obsah').innerHTML = `<form class="karta" id="nfa"><div class="hlav"><h2>Naskladnění z faktur</h2></div><div class="telo">
+    <p class="mut" style="margin-top:0">Faktury ve formátu ISDOC (i vložené v PDF) se čtou přesně a bez internetu. PDF bez ISDOC umí přečíst Claude, když sem zadáte API klíč z console.anthropic.com. Bez klíče se položky odhadnou z textu PDF.</p>
+    <div class="mrizka">
+      <label class="pole">Výchozí marže pro nové zboží (%)<input type="text" inputmode="decimal" name="vychozi_marze_pct" value="${esc(n.vychozi_marze_pct)}"></label>
+      <label class="pole">Claude API klíč (nepovinné)<input type="password" name="ai_api_klic" value="${esc(n.ai_api_klic)}" autocomplete="new-password" placeholder="sk-ant-…"></label>
+      <label class="pole">Model<input type="text" name="ai_model" value="${esc(n.ai_model)}"></label></div></div>
+    <div class="telo" style="border-top:1px solid var(--linka);text-align:right"><button class="btn hl">Uložit</button></div></form>`;
+  $('#nfa').onsubmit = async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    const m = parseMn(f.vychozi_marze_pct.value);
+    if (!Number.isFinite(m) || m < 0) return toast('Neplatná marže', 'chyba');
+    try { await ulozNastaveni({ vychozi_marze_pct: String(m), ai_api_klic: f.ai_api_klic.value.trim(), ai_model: f.ai_model.value.trim() || 'claude-opus-5-5' }); } catch (er) { chyba(er); }
   };
 }
 

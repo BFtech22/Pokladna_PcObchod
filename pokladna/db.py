@@ -139,6 +139,26 @@ CREATE TABLE IF NOT EXISTS pohyby (
 );
 CREATE INDEX IF NOT EXISTS ix_pohyby_zbozi ON pohyby(zbozi_id, cas);
 
+CREATE TABLE IF NOT EXISTS dodavatel_kody (     -- naučené párování: kód dodavatele → naše zboží
+    dodavatel TEXT NOT NULL,                     -- "ICO:12345678" nebo "NAZEV:ab computer"
+    kod TEXT NOT NULL,
+    zbozi_id INTEGER NOT NULL REFERENCES zbozi(id) ON DELETE CASCADE,
+    koeficient REAL NOT NULL DEFAULT 1,          -- kolik našich jednotek je v jedné fakturované (balení)
+    upraveno TEXT NOT NULL,
+    PRIMARY KEY (dodavatel, kod)
+);
+
+CREATE TABLE IF NOT EXISTS faktury_soubory (
+    id INTEGER PRIMARY KEY,
+    nazev TEXT NOT NULL,
+    cesta TEXT NOT NULL,
+    nahrano TEXT NOT NULL,
+    zdroj TEXT,
+    dodavatel TEXT,
+    doklad TEXT,
+    prijemka_id INTEGER REFERENCES prijemky(id)
+);
+
 CREATE TABLE IF NOT EXISTS citace (
     klic TEXT PRIMARY KEY,
     hodnota INTEGER NOT NULL
@@ -162,7 +182,16 @@ VYCHOZI_NASTAVENI = {
     "eet_cert_cesta": str(KOREN / "_zdroje" / "eet2_dokumentace" / "certs_playground" / "CA_EET-Playground-CZ00000019.p12"),
     "eet_cert_heslo": "",
     "eet_timeout_s": "3",
+    "vychozi_marze_pct": "40",
+    "ai_api_klic": "",                   # Claude API pro čtení PDF faktur bez ISDOC (nepovinné)
+    "ai_model": "claude-opus-5-5",
 }
+
+# Sloupce přidané po prvním nasazení: (tabulka, sloupec, definice)
+DOPLNENE_SLOUPCE = [
+    ("prijemky", "dodavatel_ico", "TEXT"),
+    ("prijemky", "soubor_id", "INTEGER REFERENCES faktury_soubory(id)"),
+]
 
 
 def ted() -> str:
@@ -211,6 +240,9 @@ def inicializuj() -> None:
     with spojeni() as con:
         con.execute("PRAGMA journal_mode = WAL")
         con.executescript(SCHEMA)
+        for tabulka, sloupec, definice in DOPLNENE_SLOUPCE:
+            if sloupec not in [r[1] for r in con.execute(f"PRAGMA table_info({tabulka})")]:
+                con.execute(f"ALTER TABLE {tabulka} ADD COLUMN {sloupec} {definice}")
         for k, v in VYCHOZI_NASTAVENI.items():
             con.execute("INSERT OR IGNORE INTO nastaveni (klic, hodnota) VALUES (?, ?)", (k, v))
         # Heslo testovacího certifikátu je veřejné (součást balíčku finanční správy).

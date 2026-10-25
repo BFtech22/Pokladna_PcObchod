@@ -8,11 +8,16 @@ Lokální pokladna se skladem a EET 2.0 pro prodejny PcObchod (Rumburk, Varnsdor
 - **EET 2.0:** tržba se odesílá hned při prodeji (mezní doba odezvy, výchozí 3 s). Když to nejde, fronta na pozadí zkouší odeslání každých 30 s (zákonná lhůta je 48 h). Storno odešle zápornou tržbu. V hlavičce je ukazatel stavu EET.
 - **Účtenky:** přehled po dnech, detail, storno, ruční opakované odeslání do EET a tisk na 80mm tiskárnu (zjednodušený daňový doklad s rekapitulací DPH).
 - **Zboží:** katalog s více EAN na položku, kategorie, prodejní a nákupní cena, marže, minimální stav a historie pohybů.
-- **Sklad:** stav a hodnota skladu, příjem zboží čtečkou podle faktury (příjemka) a inventura.
+- **Sklad:** stav a hodnota skladu, příjem zboží čtečkou (příjemka) a inventura.
+- **Naskladnění z faktury:** nahraje se faktura dodavatele a pokladna z ní vytáhne položky a spáruje je s katalogem.
+  - Formáty: ISDOC, ISDOCX nebo PDF. Z PDF se nejdřív zkusí vložený ISDOC, pak čtení přes Claude (když je v nastavení API klíč) a nakonec odhad z textu PDF.
+  - Párování: podle EAN, podle zapamatovaného kódu dodavatele, podle interního kódu a nakonec podle podobného názvu (jen jako návrh ke kontrole).
+  - Pokladna si pamatuje i počet kusů v balení. Neznámé položky jde rovnou založit, cena se navrhne podle výchozí marže. Doprava a poplatky se přeskakují.
+  - Upozorní na fakturu, která už byla naskladněna. Soubor faktury se uloží k příjemce.
 - **Uzávěrka:** tržba hotově a kartou, storna, DPH, přehled po prodavačích a EET, tisk.
 - **Uživatelé:** přihlášení PINem, role prodavač a správce.
 
-Zatím chybí: naskladnění přímo z PDF/ISDOC faktury, import exportu z Trellu, automatická záloha databáze mimo prodejnu a instalace na server v prodejně.
+Zatím chybí: import exportu z Trellu, automatická záloha databáze mimo prodejnu a instalace na server v prodejně.
 
 ![Prodejní obrazovka](_zdroje/nahledy/prodej_2026-10-25.jpg)
 
@@ -34,6 +39,7 @@ Pak otevřít http://localhost:8080, z jiného zařízení v síti `http://<adre
 
 - Databáze: `data/pokladna.sqlite` (jiná cesta přes proměnnou `POKLADNA_DB`).
 - Test EET proti Playgroundu: `.venv/bin/python -I eet/test_playground.py`. Ověří podpis na vzorových zprávách finanční správy a odešle zkušební tržbu (potřebuje stažené testovací certifikáty). Úplná dokumentace EET 2.0 je na [eet.gov.cz](https://eet.gov.cz/cs/o-eet/dokumenty-k-eet-2-0), v repozitáři je jen schéma XSD, WSDL a vzorové zprávy.
+- Vzorové faktury se smyšleným dodavatelem jsou v `_zdroje/vzorove_faktury/`. Znovu je vytvoří `.venv/bin/python -I _zdroje/skripty/vzorove_faktury.py`, PDF se generuje přes Google Chrome.
 - Certifikáty, databáze ani logy se do repozitáře nedávají (viz `.gitignore`).
 
 ## Struktura
@@ -43,6 +49,7 @@ Pak otevřít http://localhost:8080, z jiného zařízení v síti `http://<adre
 | `pokladna/eet_klient.py` | sestavení, podpis (WS-Security, RSA-SHA256, Exclusive C14N) a odeslání datové zprávy EET 2.0 |
 | `pokladna/eet_fronta.py` | odeslání při prodeji a fronta na pozadí |
 | `pokladna/db.py` | SQLite schéma, částky v haléřích |
+| `pokladna/faktury.py` | čtení faktur (ISDOC, PDF, Claude API) a párování položek s katalogem |
 | `pokladna/server.py` | FastAPI: JSON API a statické rozhraní |
 | `pokladna/static/` | webové rozhraní (bez sestavování), loga PcObchod |
 | `_zdroje/eet2_dokumentace/` | oficiální dokumentace EET 2.0, XSD, WSDL a testovací certifikáty |
