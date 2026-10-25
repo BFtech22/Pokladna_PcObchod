@@ -185,6 +185,13 @@ VYCHOZI_NASTAVENI = {
     "vychozi_marze_pct": "40",
     "ai_api_klic": "",                   # Claude API pro čtení PDF faktur bez ISDOC (nepovinné)
     "ai_model": "claude-opus-5-5",
+    "zaloha_heslo": "",                  # bez hesla se nezálohuje (záloha obsahuje i heslo k certifikátu)
+    "zaloha_cas": "21:30",
+    "zaloha_slozka": "",                 # USB disk / NAS připojený jako složka
+    "zaloha_rclone_cil": "",             # např. gdrive:Pokladna/Rumburk
+    "zaloha_ponechat_lokalne": "14",     # počet záloh na serveru
+    "zaloha_ponechat_venku": "60",       # dní
+    "zaloha_nazev": "",                  # název prodejny v názvu souboru zálohy
 }
 
 # Sloupce přidané po prvním nasazení: (tabulka, sloupec, definice)

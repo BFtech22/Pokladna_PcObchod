@@ -188,12 +188,14 @@ function vykresliKostru() {
       <nav class="menu">${MENU.filter((m) => !m[2] || spravce()).map(([k, t]) => `<a href="#${k}" data-m="${k}">${t}</a>`).join('')}</nav>
       <div class="uzivatel">
         ${S.eetRezim === 'playground' ? '<span class="rezim-test" title="Tržby jdou do testovacího prostředí finanční správy">EET TEST</span>' : ''}
+        <a href="#nastaveni/zaloha" class="eet-ind chyba skryt" id="zaloha-ind" title="Data nejsou zálohovaná mimo prodejnu" style="text-decoration:none">Záloha!</a>
         <span class="eet-ind" id="eet-ind">EET</span>
         <span class="mut">${esc(S.uzivatel.jmeno)}</span>
         <button class="btn mala" id="odhlasit">Odhlásit</button>
       </div></header><main id="obsah"></main>`;
   $('#odhlasit').onclick = async () => { await api('POST', '/api/odhlaseni').catch(() => {}); S.uzivatel = null; vykresliPrihlaseni(); };
   obnovEet();
+  obnovZalohu();
 }
 
 async function obnovEet() {
@@ -342,9 +344,16 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'F8') { e.preventDefault(); $('#b-zrusit').click(); }
 });
 
+// Čtečka píše jako klávesnice. Na české klávesnici z „8595…“ udělá „áříř…“ – číselnou řadu převedeme zpět.
+const CZ_CISLA = { '+': '1', 'ě': '2', 'š': '3', 'č': '4', 'ř': '5', 'ž': '6', 'ý': '7', 'á': '8', 'í': '9', 'é': '0' };
+function opravKlavesnici(t) {
+  return /^[+ěščřžýáíé0-9*]+$/.test(t) && /[+ěščřžýáíé]/.test(t) && t.length >= 6
+    ? t.replace(/[+ěščřžýáíé]/g, (c) => CZ_CISLA[c]) : t;
+}
+
 // „3*kód“ = 3 kusy. Násobitel nad 9999 se nebere (je to spíš omylem slepený kód).
 function rozeberSken(v) {
-  const t = String(v || '').trim();
+  const t = opravKlavesnici(String(v || '').trim());
   const m = t.match(/^(\d{1,4}(?:[.,]\d{1,3})?)\s*\*\s*(.*)$/);
   return m ? { mnozstvi: parseMn(m[1]), text: m[2].trim() } : { mnozstvi: 1, text: t };
 }
@@ -700,7 +709,7 @@ async function formularZbozi(id, predvyplnit, poUlozeni) {
     $$('#ean-chipy button', o.el).forEach((b) => { b.onclick = () => { eany.splice(+b.dataset.i, 1); chipy(); }; });
   };
   const eanVstup = $('#ean-vstup', o.el);
-  eanVstup.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); const v = eanVstup.value.trim(); if (v && !eany.includes(v)) eany.push(v); eanVstup.value = ''; chipy(); } };
+  eanVstup.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); const v = opravKlavesnici(eanVstup.value.trim()); if (v && !eany.includes(v)) eany.push(v); eanVstup.value = ''; chipy(); } };
   const marze = () => {
     const c = parseKc(f.cena.value); const n = parseKc(f.nakupni_cena.value); const s = +f.sazba_dph.value;
     if (!Number.isFinite(c) || !Number.isFinite(n) || !n) { $('#marze', o.el).textContent = '—'; return; }
@@ -714,7 +723,7 @@ async function formularZbozi(id, predvyplnit, poUlozeni) {
   const ul = $('[data-ulozit]', o.el);
   if (!ul) return;
   const uloz = async () => {
-    const v = eanVstup.value.trim(); if (v && !eany.includes(v)) eany.push(v);
+    const v = opravKlavesnici(eanVstup.value.trim()); if (v && !eany.includes(v)) eany.push(v);
     const cena = parseKc(f.cena.value); const nak = parseKc(f.nakupni_cena.value);
     if (!f.nazev.value.trim()) return toast('Vyplňte název', 'chyba');
     if (!Number.isFinite(cena) || cena == null) return toast('Neplatná prodejní cena', 'chyba');
@@ -825,8 +834,7 @@ function skladPrijem() {
     e.preventDefault();
     const v = sken.value.trim(); sken.value = '';
     if (!v) return;
-    const m = v.match(/^(\d+(?:[.,]\d+)?)\s*\*\s*(.+)$/);
-    const q = m ? parseMn(m[1]) : 1; const kod = m ? m[2].trim() : v;
+    const { mnozstvi: q, text: kod } = rozeberSken(v);
     try { pridej(await api('GET', '/api/zbozi/kod/' + encodeURIComponent(kod)), q); }
     catch {
       const nalez = await api('GET', '/api/zbozi?limit=2&q=' + encodeURIComponent(kod)).catch(() => []);
@@ -1073,9 +1081,11 @@ function viewNastaveni(pod = 'firma') {
   if (!spravce()) { location.hash = '#prodej'; return; }
   $('#obsah').innerHTML = `<div class="zalozky"><a href="#nastaveni/firma" class="${pod === 'firma' ? 'aktivni' : ''}">Firma a účtenka</a>
     <a href="#nastaveni/eet" class="${pod === 'eet' ? 'aktivni' : ''}">EET</a><a href="#nastaveni/faktury" class="${pod === 'faktury' ? 'aktivni' : ''}">Faktury</a>
+    <a href="#nastaveni/zaloha" class="${pod === 'zaloha' ? 'aktivni' : ''}">Záloha</a>
     <a href="#nastaveni/uzivatele" class="${pod === 'uzivatele' ? 'aktivni' : ''}">Uživatelé</a></div><div id="n-obsah"></div>`;
   if (pod === 'eet') return nastaveniEet();
   if (pod === 'faktury') return nastaveniFaktury();
+  if (pod === 'zaloha') return nastaveniZaloha();
   if (pod === 'uzivatele') return nastaveniUzivatele();
   return nastaveniFirma();
 }
@@ -1119,7 +1129,9 @@ async function nastaveniEet() {
       <label class="pole">EIČ (DIČ)<input type="text" name="eet_eic" value="${esc(n.eet_eic)}" placeholder="CZ12345678"></label>
       <label class="pole">Označení evidenční jednotky<input type="text" name="eet_id_jednotky" value="${esc(n.eet_id_jednotky)}" inputmode="numeric"></label>
       <label class="pole">Označení pokladny<input type="text" name="eet_id_pokl" value="${esc(n.eet_id_pokl)}"></label>
-      <label class="pole siroke">Cesta k pokladnímu certifikátu (.p12) na serveru<input type="text" name="eet_cert_cesta" value="${esc(n.eet_cert_cesta)}"></label>
+      <div class="pole siroke"><span>Pokladní certifikát (.p12 z DIS+)</span>
+        <div class="radek"><input type="text" name="eet_cert_cesta" value="${esc(n.eet_cert_cesta)}" class="vypln" title="Cesta k souboru na serveru">
+        <label class="btn">Nahrát certifikát<input type="file" id="ne-cert" accept=".p12,.pfx" class="skryt"></label></div></div>
       <label class="pole">Heslo k certifikátu<input type="password" name="eet_cert_heslo" value="${esc(n.eet_cert_heslo)}" autocomplete="new-password"></label>
       <label class="pole">Mezní doba odezvy (s, min. 2)<input type="text" name="eet_timeout_s" value="${esc(n.eet_timeout_s)}" inputmode="decimal"></label></div>
     <div id="ne-vysledek" style="margin-top:14px"></div></div>
@@ -1132,6 +1144,28 @@ async function nastaveniEet() {
     if (+d.eet_timeout_s < 2) return toast('Mezní doba odezvy musí být aspoň 2 s', 'chyba');
     if (d.eet_rezim === 'produkce' && !await potvrd('Ostrý režim EET', 'Od teď se každá tržba ostře eviduje u finanční správy. Pokračovat?', 'Zapnout produkci')) return;
     try { await ulozNastaveni(d); vykresliKostru(); route(); } catch (er) { chyba(er); }
+  };
+  $('#ne-cert').onchange = (e) => {
+    const soubor = e.target.files[0]; e.target.value = '';
+    if (!soubor) return;
+    const o = okno({
+      titul: 'Nahrát pokladní certifikát',
+      obsah: `<p class="mut" style="margin-top:0">${esc(soubor.name)}</p><label class="pole">Heslo k certifikátu (zadané při jeho vytvoření v DIS+)<input type="password" id="nc-h" autocomplete="off" autofocus></label>`,
+      pata: '<button class="btn" data-zpet>Zpět</button><button class="btn hl" data-ok>Nahrát</button>',
+    });
+    $('[data-zpet]', o.el).onclick = () => o.zavri();
+    const ok = () => {
+      const ctecka = new FileReader();
+      ctecka.onload = async () => {
+        try {
+          const r = await api('POST', '/api/eet/certifikat', { nazev: soubor.name, data: String(ctecka.result).split(',')[1], heslo: $('#nc-h', o.el).value });
+          o.zavri(); toast(`Certifikát ${r.eic} nahrán, platí do ${new Date(r.plati_do).toLocaleDateString('cs-CZ')}${r.test ? ' (testovací)' : ''}`, 'ok'); nastaveniEet();
+        } catch (er) { chyba(er); }
+      };
+      ctecka.readAsDataURL(soubor);
+    };
+    $('[data-ok]', o.el).onclick = ok;
+    $('#nc-h', o.el).onkeydown = (ev) => { if (ev.key === 'Enter') ok(); };
   };
   $('#ne-test').onclick = async () => {
     const v = $('#ne-vysledek'); v.innerHTML = '<span class="mut">Zkouším spojení…</span>';
@@ -1161,6 +1195,50 @@ async function nastaveniFaktury() {
     try { await ulozNastaveni({ vychozi_marze_pct: String(m), ai_api_klic: f.ai_api_klic.value.trim(), ai_model: f.ai_model.value.trim() || 'claude-opus-5-5' }); } catch (er) { chyba(er); }
   };
 }
+
+async function nastaveniZaloha() {
+  let n; let st;
+  try { [n, st] = await Promise.all([api('GET', '/api/nastaveni'), api('GET', '/api/zaloha/stav')]); } catch (e) { return chyba(e); }
+  const p = st.posledni;
+  $('#n-obsah').innerHTML = `<div class="karta" style="margin-bottom:14px"><div class="hlav"><h2>Stav zálohy</h2><button class="btn hl" id="nz-ted">Zálohovat teď</button></div><div class="telo">
+      ${st.varovani ? '<div class="upozorneni chyba">Za posledních 36 hodin neodešla žádná záloha mimo prodejnu. Při požáru nebo krádeži serveru by se data ztratila.</div>' : ''}
+      ${p ? `<p style="margin-top:0">Poslední záloha <strong>${datumCas(p.cas)}</strong> · ${Math.round(p.velikost / 1024)} kB · ${p.mista.length ? 'odesláno: ' + esc(p.mista.join(', ')) : '<span style="color:var(--chyba)">jen na tomto serveru</span>'}</p>
+        ${p.chyby.map((x) => `<div class="upozorneni chyba">${esc(x)}</div>`).join('')}` : '<p class="mut" style="margin-top:0">Zatím žádná záloha.</p>'}
+      ${st.lokalni.length ? `<details><summary class="mut" style="cursor:pointer">Zálohy na serveru (${st.lokalni.length})</summary><table class="tab" style="margin-top:8px"><tbody>
+        ${st.lokalni.map((z) => `<tr><td class="mono">${esc(z.nazev)}</td><td>${datumCas(z.cas)}</td><td class="num">${Math.round(z.velikost / 1024)} kB</td><td><a class="btn mala" href="/api/zaloha/soubor/${encodeURIComponent(z.nazev)}">Stáhnout</a></td></tr>`).join('')}</tbody></table></details>` : ''}
+    </div></div>
+    <form class="karta" id="nz"><div class="hlav"><h2>Nastavení zálohy</h2></div><div class="telo">
+      <p class="mut" style="margin-top:0">Záloha obsahuje databázi, nahrané faktury a certifikáty a je zašifrovaná heslem. <strong>Heslo si uložte mimo pokladnu</strong>, bez něj zálohu nikdo neobnoví.</p>
+      <div class="mrizka">
+        <label class="pole">Heslo zálohy (min. 8 znaků)<input type="password" name="zaloha_heslo" value="${esc(n.zaloha_heslo)}" autocomplete="new-password"></label>
+        <label class="pole">Denní záloha v<input type="text" name="zaloha_cas" value="${esc(n.zaloha_cas)}" placeholder="21:30"></label>
+        <label class="pole">Název prodejny v souboru<input type="text" name="zaloha_nazev" value="${esc(n.zaloha_nazev)}" placeholder="Rumburk"></label>
+        <label class="pole siroke">Cíl na internetu přes rclone${st.rclone ? '' : ' <span style="color:var(--chyba)">(rclone na serveru chybí)</span>'}<input type="text" name="zaloha_rclone_cil" value="${esc(n.zaloha_rclone_cil)}" placeholder="gdrive:Pokladna/Rumburk"></label>
+        <label class="pole siroke">Složka mimo server (USB disk, NAS)<input type="text" name="zaloha_slozka" value="${esc(n.zaloha_slozka)}" placeholder="/mnt/zaloha"></label>
+        <label class="pole">Ponechat na serveru (počet)<input type="text" name="zaloha_ponechat_lokalne" value="${esc(n.zaloha_ponechat_lokalne)}" inputmode="numeric"></label>
+        <label class="pole">Ponechat venku (dní)<input type="text" name="zaloha_ponechat_venku" value="${esc(n.zaloha_ponechat_venku)}" inputmode="numeric"></label></div></div>
+      <div class="telo" style="border-top:1px solid var(--linka);text-align:right"><button class="btn hl">Uložit</button></div></form>`;
+  $('#nz').onsubmit = async (e) => {
+    e.preventDefault();
+    const f = e.target; const d = {};
+    ['zaloha_heslo', 'zaloha_cas', 'zaloha_nazev', 'zaloha_rclone_cil', 'zaloha_slozka', 'zaloha_ponechat_lokalne', 'zaloha_ponechat_venku'].forEach((k) => { d[k] = f[k].value.trim(); });
+    if (d.zaloha_heslo && d.zaloha_heslo !== '********' && d.zaloha_heslo.length < 8) return toast('Heslo zálohy musí mít aspoň 8 znaků', 'chyba');
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(d.zaloha_cas)) return toast('Čas zálohy zadejte jako HH:MM', 'chyba');
+    try { await ulozNastaveni(d); nastaveniZaloha(); } catch (er) { chyba(er); }
+  };
+  $('#nz-ted').onclick = async (e) => {
+    e.target.disabled = true; e.target.textContent = 'Zálohuji…';
+    try { const r = await api('POST', '/api/zaloha'); toast(r.posledni.chyby.length ? 'Záloha vytvořena, ale odeslání selhalo' : 'Záloha hotová', r.posledni.chyby.length ? 'chyba' : 'ok'); nastaveniZaloha(); obnovZalohu(); }
+    catch (er) { chyba(er); e.target.disabled = false; e.target.textContent = 'Zálohovat teď'; }
+  };
+}
+
+async function obnovZalohu() {
+  const el = $('#zaloha-ind');
+  if (!el || !spravce()) return;
+  try { const st = await api('GET', '/api/zaloha/stav'); el.classList.toggle('skryt', !st.varovani); } catch { /* nic */ }
+}
+setInterval(obnovZalohu, 30 * 60 * 1000);
 
 async function nastaveniUzivatele() {
   let rows; try { rows = await api('GET', '/api/uzivatele'); } catch (e) { return chyba(e); }

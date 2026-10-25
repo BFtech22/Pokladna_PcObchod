@@ -1,0 +1,33 @@
+[Unit]
+Description=Pokladna PcObchod
+Documentation=file:///opt/pokladna/instalace/README.md
+# EET potřebuje přesný čas, proto se čeká na synchronizaci hodin.
+After=network-online.target time-sync.target
+Wants=network-online.target time-sync.target
+
+[Service]
+Type=simple
+User=pokladna
+Group=pokladna
+WorkingDirectory=/opt/pokladna
+Environment=POKLADNA_DB=/var/lib/pokladna/pokladna.sqlite
+Environment=RCLONE_CONFIG=/var/lib/pokladna/rclone.conf
+Environment=TZ=Europe/Prague
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/pokladna/.venv/bin/python -m pokladna --host 0.0.0.0 --port 80
+Restart=always
+RestartSec=3
+
+# Port 80 bez práv roota a omezení přístupu jen na vlastní data a připojené disky pro zálohu.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/pokladna
+ReadWritePaths=-/mnt -/media
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -6,8 +6,10 @@ import base64
 import binascii
 import json
 import logging
+import os
 import re
 import secrets
+import shutil
 import sqlite3
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -20,8 +22,9 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import db, faktury
+from . import db, faktury, zaloha
 from .eet_fronta import sluzba as eet
+from .eet_klient import PRAHA, PokladniCertifikat
 
 log = logging.getLogger("pokladna")
 STATIC = Path(__file__).resolve().parent / "static"
@@ -33,7 +36,9 @@ async def lifespan(app: FastAPI):
     db.inicializuj()
     eet.spust()
     eet.probud()
+    zaloha.planovac.spust()
     yield
+    zaloha.planovac.zastav()
     eet.zastav()
 
 
@@ -602,7 +607,84 @@ def uzaverka(datum: Optional[str] = None, u=Depends(uzivatel), con: sqlite3.Conn
 # --------------------------------------------------------------------------- nastavení a uživatelé
 
 UPRAVITELNE = set(db.VYCHOZI_NASTAVENI)
-TAJNE = ("eet_cert_heslo", "ai_api_klic")   # do prohlížeče se posílají jen jako hvězdičky
+TAJNE = ("eet_cert_heslo", "ai_api_klic", "zaloha_heslo")   # do prohlížeče se posílají jen jako hvězdičky
+
+
+# --------------------------------------------------------------------------- certifikát a záloha
+
+class CertifikatVstup(BaseModel):
+    nazev: str
+    data: str                                   # .p12 v base64
+    heslo: str = Field(min_length=1)
+
+
+@app.post("/api/eet/certifikat")
+def nahraj_certifikat(vstup: CertifikatVstup, u=Depends(spravce), con: sqlite3.Connection = Depends(con_dep)):
+    try:
+        obsah = base64.b64decode(vstup.data, validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(400, "Soubor se nepodařilo přenést")
+    slozka = db.DB_CESTA.parent / "certifikaty"
+    slozka.mkdir(parents=True, exist_ok=True)
+    os.chmod(slozka, 0o700)
+    docasny = slozka / f".nahravani-{secrets.token_hex(4)}.p12"
+    docasny.write_bytes(obsah)
+    try:
+        cert = PokladniCertifikat(docasny, vstup.heslo)
+    except Exception:
+        docasny.unlink(missing_ok=True)
+        raise HTTPException(400, "Certifikát nejde otevřít – zkontrolujte soubor .p12 a heslo")
+    eic = next((a.value for a in cert.cert.subject if a.oid.dotted_string == "2.5.4.3"), None)
+    cil = slozka / f"{eic or 'certifikat'}_{cert.plati_do:%Y%m%d}.p12"
+    docasny.replace(cil)
+    os.chmod(cil, 0o600)
+    with db.transakce(con):
+        zmeny = {"eet_cert_cesta": str(cil), "eet_cert_heslo": vstup.heslo}
+        if eic and re.fullmatch(r"CZ\d{8,10}", eic):
+            zmeny["eet_eic"] = eic
+        for k, v in zmeny.items():
+            con.execute("UPDATE nastaveni SET hodnota = ? WHERE klic = ?", (v, k))
+    return {"eic": eic, "plati_do": cert.plati_do.date().isoformat(), "vydal": cert.cert.issuer.rfc4514_string(),
+            "test": "playground" in cert.cert.issuer.rfc4514_string().lower()}
+
+
+def _stav_zalohy() -> dict:
+    stav = zaloha.cti_stav()
+    lokalni = sorted(zaloha.ZALOHY_DIR.glob("pokladna-*.zaloha"), key=lambda p: p.stat().st_mtime, reverse=True) \
+        if zaloha.ZALOHY_DIR.is_dir() else []
+    posledni_mimo = stav.get("posledni_mimo")
+    stari_h = None
+    if posledni_mimo:
+        stari_h = (datetime.now(PRAHA) - datetime.fromisoformat(posledni_mimo)).total_seconds() / 3600
+    return {**stav, "lokalni": [{"nazev": p.name, "velikost": p.stat().st_size,
+                                 "cas": datetime.fromtimestamp(p.stat().st_mtime, PRAHA).isoformat(timespec="seconds")}
+                                for p in lokalni[:30]],
+            "rclone": bool(shutil.which("rclone")),
+            "varovani": stari_h is None or stari_h > 36}
+
+
+@app.get("/api/zaloha/stav")
+def stav_zalohy(u=Depends(spravce)):
+    return _stav_zalohy()
+
+
+@app.post("/api/zaloha")
+def zalohuj_ted(u=Depends(spravce)):
+    try:
+        zaloha.planovac.zalohuj()
+    except zaloha.ChybaZalohy as e:
+        raise HTTPException(400, str(e))
+    return _stav_zalohy()
+
+
+@app.get("/api/zaloha/soubor/{nazev}")
+def stahni_zalohu(nazev: str, u=Depends(spravce)):
+    if not re.fullmatch(r"pokladna-[a-z0-9-]+-\d{8}-\d{6}\.zaloha", nazev):
+        raise HTTPException(400, "Neplatný název zálohy")
+    cesta = zaloha.ZALOHY_DIR / nazev
+    if not cesta.is_file():
+        raise HTTPException(404, "Záloha nenalezena")
+    return FileResponse(cesta, filename=nazev, media_type="application/octet-stream")
 
 
 @app.get("/api/nastaveni")

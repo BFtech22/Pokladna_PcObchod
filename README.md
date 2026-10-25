@@ -16,8 +16,13 @@ Lokální pokladna se skladem a EET 2.0 pro prodejny PcObchod (Rumburk, Varnsdor
   - Upozorní na fakturu, která už byla naskladněna. Soubor faktury se uloží k příjemce.
 - **Uzávěrka:** tržba hotově a kartou, storna, DPH, přehled po prodavačích a EET, tisk.
 - **Uživatelé:** přihlášení PINem, role prodavač a správce.
+- **Záloha:** každý den šifrovaná záloha (AES-256) databáze, faktur a certifikátů. Odchází mimo prodejnu přes rclone (Google Disk a další) nebo na USB disk či NAS. Správce vidí upozornění, když 36 h neodešla, obnova je jedním příkazem.
+- **Certifikát EET:** nahrává se přes rozhraní (soubor .p12 a heslo), EIČ se vyplní samo.
+- **Čtečka na české klávesnici:** kód napsaný jako „áříř…“ se sám převede na číslice.
 
-Zatím chybí: import exportu z Trellu, automatická záloha databáze mimo prodejnu a instalace na server v prodejně.
+Zatím chybí: import exportu z Trellu.
+
+**Instalace do prodejny** (mini PC s Debianem nebo Raspberry Pi), záloha, obnova a nastavení pokladního PC: [instalace/README.md](instalace/README.md).
 
 ![Prodejní obrazovka](_zdroje/nahledy/prodej_2026-10-25.jpg)
 
@@ -50,6 +55,8 @@ Pak otevřít http://localhost:8080, z jiného zařízení v síti `http://<adre
 | `pokladna/eet_fronta.py` | odeslání při prodeji a fronta na pozadí |
 | `pokladna/db.py` | SQLite schéma, částky v haléřích |
 | `pokladna/faktury.py` | čtení faktur (ISDOC, PDF, Claude API) a párování položek s katalogem |
+| `pokladna/zaloha.py` | šifrovaná záloha, odeslání mimo prodejnu, plán a obnova (`python -m pokladna.zaloha`) |
+| `instalace/` | instalační skript, služba systemd a návod pro prodejnu |
 | `pokladna/server.py` | FastAPI: JSON API a statické rozhraní |
 | `pokladna/static/` | webové rozhraní (bez sestavování), loga PcObchod |
 | `_zdroje/eet2_dokumentace/` | oficiální dokumentace EET 2.0, XSD, WSDL a testovací certifikáty |
