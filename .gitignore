@@ -1,0 +1,20 @@
+# Prostředí a provozní data – nikdy do repozitáře
+.venv/
+__pycache__/
+*.pyc
+data/
+eet/log/
+.claude/
+.DS_Store
+
+# Certifikáty a hesla (ostré i testovací) – stahují se zvlášť, viz README
+*.p12
+*.pfx
+*.pem
+*.key
+_zdroje/eet2_dokumentace/certs_playground/
+_zdroje/eet2_dokumentace/*.zip
+
+# Dokumentace finanční správy (část je TLP:AMBER) – v repozitáři jen schéma, WSDL a vzorové zprávy
+_zdroje/eet2_dokumentace/*.pdf
+_zdroje/eet2_dokumentace/txt/
