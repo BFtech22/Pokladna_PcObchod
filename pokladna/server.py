@@ -23,14 +23,14 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import db, fakturace, faktury, posta, zaloha
+from . import db, fakturace, faktury, kasa, posta, zaloha
 from . import uzaverka as uzaverky
+from .web import COOKIE, con_dep, spravce, uzivatel
 from .eet_fronta import sluzba as eet
 from .eet_klient import PRAHA, PokladniCertifikat
 
 log = logging.getLogger("pokladna")
 STATIC = Path(__file__).resolve().parent / "static"
-COOKIE = "pokladna_relace"
 
 
 @asynccontextmanager
@@ -48,35 +48,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Pokladna PcObchod", lifespan=lifespan, docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
+app.include_router(kasa.router)
 
 
 # --------------------------------------------------------------------------- pomocné
-
-def con_dep():
-    con = db.pripoj()
-    try:
-        yield con
-    finally:
-        con.close()
-
-
-def uzivatel(request: Request, con: sqlite3.Connection = Depends(con_dep)) -> sqlite3.Row:
-    token = request.cookies.get(COOKIE)
-    u = None
-    if token:
-        u = con.execute(
-            "SELECT u.* FROM relace r JOIN uzivatele u ON u.id = r.uzivatel_id "
-            "WHERE r.token = ? AND u.aktivni = 1", (token,)).fetchone()
-    if u is None:
-        raise HTTPException(401, "Nepřihlášen")
-    return u
-
-
-def spravce(u: sqlite3.Row = Depends(uzivatel)) -> sqlite3.Row:
-    if u["role"] != "SPRAVCE":
-        raise HTTPException(403, "Jen pro správce")
-    return u
-
 
 def zaokrouhli_kc(halere: int) -> int:
     """Zaokrouhlení na celé koruny (matematicky, symetricky pro záporné částky)."""
@@ -740,7 +715,9 @@ def korekce(data: KorekceVstup, u=Depends(spravce), con: sqlite3.Connection = De
 
 @app.get("/api/uzaverka")
 def uzaverka(datum: Optional[str] = None, u=Depends(uzivatel), con: sqlite3.Connection = Depends(con_dep)):
-    vysledek = uzaverky.souhrn(con, datum or db.ted()[:10])
+    datum = datum or db.ted()[:10]
+    vysledek = uzaverky.souhrn(con, datum)
+    vysledek["hotovost"] = kasa.den(con, datum)
     vysledek["odeslano"] = posta.stav().get("uzaverka")
     return vysledek
 
