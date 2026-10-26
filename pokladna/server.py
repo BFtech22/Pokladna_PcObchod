@@ -25,7 +25,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import banka, db, export_ucetni, fakturace, faktury, kasa, posta, servis, zaloha
+from . import banka, db, export_ucetni, fakturace, faktury, import_trell, kasa, posta, servis, zaloha
 from . import uzaverka as uzaverky
 from .web import COOKIE, con_dep, spravce, uzivatel
 from .eet_fronta import sluzba as eet
@@ -301,6 +301,34 @@ def interni_ean(data: InterniEanVstup, u=Depends(spravce), con: sqlite3.Connecti
             con.execute("INSERT INTO zbozi_ean (ean, zbozi_id) VALUES (?, ?)", (kod, zid))
             prideleno.append({"zbozi_id": zid, "ean": kod})
     return {"prideleno": prideleno}
+
+
+class ImportTrellVstup(BaseModel):
+    nazev: str = Field(min_length=1, max_length=255)
+    data: str                                   # XML export skladových karet v base64
+    provest: bool = False                       # False = jen náhled
+    zaporne_na_nulu: bool = False
+    serie: bool = True                          # u telefonů, tabletů a notebooků načítat IMEI / SN
+
+
+@app.post("/api/import/trell")
+def import_z_trellu(vstup: ImportTrellVstup, u=Depends(spravce), con: sqlite3.Connection = Depends(con_dep)):
+    try:
+        obsah = base64.b64decode(vstup.data, validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(400, "Soubor se nepodařilo přenést")
+    if len(obsah) > 60 * 1024 * 1024:
+        raise HTTPException(413, "Soubor je větší než 60 MB")
+    try:
+        karty, varovani = import_trell.nacti(obsah)
+    except import_trell.ChybaImportu as e:
+        raise HTTPException(400, str(e))
+    nahled = import_trell.nahled(con, karty, vstup.zaporne_na_nulu, vstup.serie)
+    if not vstup.provest:
+        return {"nahled": nahled, "varovani": varovani}
+    vysledek = import_trell.importuj(con, karty, u["id"], vstup.zaporne_na_nulu, vstup.serie)
+    log.info("Import z Trellu %s: %s", vstup.nazev, vysledek)
+    return {"nahled": nahled, "varovani": varovani, "vysledek": vysledek}
 
 
 # --------------------------------------------------------------------------- prodej

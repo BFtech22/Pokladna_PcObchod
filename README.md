@@ -48,7 +48,11 @@ Lokální pokladna se skladem a EET 2.0 pro prodejny PcObchod (Rumburk, Varnsdor
 - **Certifikát EET:** nahrává se přes rozhraní (soubor .p12 a heslo), EIČ se vyplní samo.
 - **Čtečka na české klávesnici:** kód napsaný jako „áříř…“ se sám převede na číslice.
 
-Zatím chybí: import exportu z Trellu.
+- **Import z Trellu:** Nastavení → Import z Trellu (nebo `python -m pokladna.import_trell SOUBOR.xml --provest`). Načte XML export skladových karet z Trellu (export pro e-shop): název, kategorii, prodejní cenu, EAN nebo interní kód a stav skladu, nejdřív jako náhled.
+  - Trell píše v hlavičce iso-8859-2, data jsou ve windows-1250 – import to opraví, stejně jako neošetřené „&“. Předponu „X“ u kódů odstraní, UPC (12 číslic) uloží i s nulou na začátku, kategorie lišící se velikostí písmen sloučí.
+  - DPH se nastaví 21 % a nákupní cena se doplní při prvním příjmu (Trell je neexportuje). Stav se zapíše jako inventura „import Trell“, záporné stavy jde zapsat jako 0.
+  - U telefonů, tabletů, notebooků a počítačů (podle kategorie nebo začátku názvu „MT“, „NTB“…, kromě příslušenství) zapne načítání IMEI / SN.
+  - Opakovaný import (finálně k 31. 12.) existující zboží najde podle EAN nebo kódu, aktualizuje a stav dorovná, nic nezdvojí. Export z Varnsdorfu (13 639 karet) se načte za 1 s.
 
 **Instalace do prodejny** (mini PC s Debianem nebo Raspberry Pi), záloha, obnova a nastavení pokladního PC: [instalace/README.md](instalace/README.md).
 
@@ -94,6 +98,7 @@ Pak otevřít http://localhost:8080, z jiného zařízení v síti `http://<adre
 | `pokladna/servis.py` | servisní zakázky a reklamace, sériová čísla |
 | `pokladna/banka.py` | čtení bankovních výpisů a párování plateb |
 | `pokladna/export_ucetni.py` | měsíční ZIP pro účetní |
+| `pokladna/import_trell.py` | import katalogu a stavu skladu z XML exportu Trellu |
 | `pokladna/web.py` | společné závislosti API (databáze, přihlášený uživatel) |
 | `pokladna/posta.py` | e-maily přes SMTP, uzávěrka s Excelem, automatické odeslání |
 | `pokladna/uzaverka.py` | souhrn dne a měsíční přehled |

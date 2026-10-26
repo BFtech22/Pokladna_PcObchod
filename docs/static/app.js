@@ -1275,7 +1275,7 @@ function viewNastaveni(pod = 'firma') {
   $('#obsah').innerHTML = `<div class="zalozky"><a href="#nastaveni/firma" class="${pod === 'firma' ? 'aktivni' : ''}">Firma a účtenka</a>
     <a href="#nastaveni/eet" class="${pod === 'eet' ? 'aktivni' : ''}">EET</a><a href="#nastaveni/faktury" class="${pod === 'faktury' ? 'aktivni' : ''}">Faktury</a>
     <a href="#nastaveni/fakturace" class="${pod === 'fakturace' ? 'aktivni' : ''}">Fakturace</a><a href="#nastaveni/email" class="${pod === 'email' ? 'aktivni' : ''}">E-mail</a>
-    <a href="#nastaveni/servis" class="${pod === 'servis' ? 'aktivni' : ''}">Servis a štítky</a><a href="#nastaveni/zaloha" class="${pod === 'zaloha' ? 'aktivni' : ''}">Záloha</a>
+    <a href="#nastaveni/servis" class="${pod === 'servis' ? 'aktivni' : ''}">Servis a štítky</a><a href="#nastaveni/import" class="${pod === 'import' ? 'aktivni' : ''}">Import z Trellu</a><a href="#nastaveni/zaloha" class="${pod === 'zaloha' ? 'aktivni' : ''}">Záloha</a>
     <a href="#nastaveni/uzivatele" class="${pod === 'uzivatele' ? 'aktivni' : ''}">Uživatelé</a></div><div id="n-obsah"></div>`;
   if (pod === 'eet') return nastaveniEet();
   if (pod === 'faktury') return nastaveniFaktury();
@@ -1284,7 +1284,55 @@ function viewNastaveni(pod = 'firma') {
   if (pod === 'email') return nastaveniEmail();
   if (pod === 'uzivatele') return nastaveniUzivatele();
   if (pod === 'servis') return nastaveniServis();
+  if (pod === 'import') return nastaveniImport();
   return nastaveniFirma();
+}
+
+function nastaveniImport() {
+  $('#n-obsah').innerHTML = `<div class="karta"><div class="hlav"><h2>Import katalogu a skladu z Trellu</h2><label class="btn hl">Vybrat export z Trellu…<input type="file" id="it-soubor" accept=".xml" class="skryt"></label></div>
+    <div class="telo"><p class="mut" style="margin-top:0">V Trellu vyexportujte skladové karty do XML (export pro e-shop) a soubor sem nahrajte. Nejdřív se ukáže náhled, nic se nezapíše, dokud import nepotvrdíte.</p>
+      <ul class="mut2" style="line-height:1.7;margin:0 0 8px"><li>Přenese se název, kategorie, prodejní cena s DPH, čárový kód (EAN) nebo interní kód a stav skladu. Stav se zapíše jako inventura „import Trell“.</li>
+        <li>Trell neexportuje sazbu DPH ani nákupní ceny: DPH se nastaví 21 %, nákupní cena se doplní při prvním příjmu zboží.</li>
+        <li>Import jde pustit znovu (třeba finálně k 31. 12.): existující zboží se aktualizuje a stav se dorovná, nic se nezdvojí.</li></ul>
+      <div class="mrizka" style="max-width:760px"><label class="zatrh"><input type="checkbox" id="it-nula"> Záporné stavy z Trellu zapsat jako 0</label>
+        <label class="zatrh"><input type="checkbox" id="it-serie" checked> U telefonů, tabletů, notebooků a počítačů načítat při prodeji IMEI / sériové číslo</label></div>
+      <div id="it-vysl" style="margin-top:12px"></div></div></div>`;
+  let soubor = null; let data64 = null;
+  const odeslat = async (provest) => {
+    const r = await api('POST', '/api/import/trell', { nazev: soubor.name, data: data64, provest, zaporne_na_nulu: $('#it-nula').checked, serie: $('#it-serie').checked });
+    const n = r.nahled;
+    $('#it-vysl').innerHTML = `${r.vysledek ? `<div class="upozorneni" style="background:var(--ok-svetla);color:var(--ok)">Hotovo: nových ${r.vysledek.nove}, aktualizovaných ${r.vysledek.aktualizovane}, stav dorovnán u ${r.vysledek.korekce} položek. <a href="#zbozi">Otevřít zboží</a></div>` : ''}
+      ${r.varovani.map((v) => `<div class="upozorneni">${esc(v)}</div>`).join('')}
+      <div class="dlazdice"><div class="karta"><div class="pop">Karet v exportu</div><div class="hod">${n.pocet.toLocaleString('cs-CZ')}</div></div>
+        <div class="karta"><div class="pop">Nových / už v pokladně</div><div class="hod">${n.nove.toLocaleString('cs-CZ')} / ${n.existuje.toLocaleString('cs-CZ')}</div></div>
+        <div class="karta"><div class="pop">Skladem</div><div class="hod">${n.skladem.toLocaleString('cs-CZ')} karet · ${mn(n.kusu)} ks</div></div>
+        <div class="karta"><div class="pop">Hodnota v prodejních cenách</div><div class="hod">${kc(n.hodnota)}</div></div>
+        <div class="karta" style="${n.zaporne ? 'border-color:#efc4c4' : ''}"><div class="pop">Záporný stav v Trellu</div><div class="hod" style="${n.zaporne ? 'color:var(--chyba)' : ''}">${n.zaporne.toLocaleString('cs-CZ')}</div></div>
+        <div class="karta"><div class="pop">S EAN / s interním kódem</div><div class="hod">${n.s_ean.toLocaleString('cs-CZ')} / ${n.s_kodem.toLocaleString('cs-CZ')}</div></div></div>
+      <p class="mut2">${n.kategorii} kategorií (nejvíc: ${n.kategorie.slice(0, 6).map(([k, c]) => `${esc(k)} ${c}`).join(', ')}) · na nule ${n.nula.toLocaleString('cs-CZ')} · bez ceny ${n.bez_ceny} · s IMEI / SN ${n.se_serii}</p>
+      <h3 style="font-size:15px;margin:14px 0 6px">Ukázka zboží skladem</h3>
+      <table class="tab"><thead><tr><th>Název</th><th>Kategorie</th><th>EAN / kód</th><th class="num">Cena</th><th class="num">Stav</th></tr></thead><tbody>
+        ${n.ukazka.map((z) => `<tr><td>${esc(z.nazev)}</td><td>${esc(z.kategorie || '')}</td><td class="mono">${esc(z.eany[0] || z.kod || '')}</td><td class="num">${kc(z.cena)}</td><td class="num">${mn(z.stav)}</td></tr>`).join('')}</tbody></table>
+      ${n.pocet_upozorneni ? `<details style="margin-top:10px"><summary class="mut" style="cursor:pointer">Upozornění u ${n.pocet_upozorneni} karet (duplicitní kódy, jiný sklad…)</summary><table class="tab" style="margin-top:6px"><tbody>
+        ${n.upozorneni.map((x) => `<tr><td>${esc(x.nazev)}</td><td class="mono">${esc(x.kod)}</td><td class="mut2">${esc(x.text)}</td></tr>`).join('')}</tbody></table></details>` : ''}
+      ${r.vysledek ? '' : `<div class="radek" style="justify-content:flex-end;margin-top:14px"><button class="btn ok" id="it-provest">Importovat ${n.pocet.toLocaleString('cs-CZ')} karet</button></div>`}`;
+    const b = $('#it-provest');
+    if (b) b.onclick = async () => {
+      if (!await potvrd('Import z Trellu', `Zapsat ${n.nove.toLocaleString('cs-CZ')} nových karet${n.existuje ? ` a aktualizovat ${n.existuje.toLocaleString('cs-CZ')} existujících` : ''} a dorovnat stav skladu podle Trellu?`, 'Importovat')) return;
+      b.disabled = true; b.textContent = 'Importuji…';
+      try { await odeslat(true); toast('Import z Trellu hotový', 'ok'); } catch (e) { chyba(e); b.disabled = false; }
+    };
+  };
+  $('#it-soubor').onchange = (e) => {
+    soubor = e.target.files[0]; e.target.value = '';
+    if (!soubor) return;
+    if (window.POKLADNA_DEMO) return toast('V demu se import z Trellu nedělá – ve skutečné pokladně se z exportu načte celý katalog a stav skladu.');
+    $('#it-vysl').innerHTML = '<span class="mut">Načítám…</span>';
+    const ctecka = new FileReader();
+    ctecka.onload = async () => { data64 = String(ctecka.result).split(',')[1]; try { await odeslat(false); } catch (er) { $('#it-vysl').innerHTML = `<div class="upozorneni chyba">${esc(er.message)}</div>`; } };
+    ctecka.readAsDataURL(soubor);
+  };
+  ['it-nula', 'it-serie'].forEach((id) => { $('#' + id).onchange = () => { if (data64) odeslat(false).catch(chyba); }; });
 }
 
 async function nastaveniServis() {
