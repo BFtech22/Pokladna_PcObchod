@@ -64,7 +64,7 @@ RE_EAN = re.compile(r"(?<!\d)(\d{13}|\d{8})(?!\d)")
 def _halere(hodnota) -> Optional[int]:
     if hodnota is None:
         return None
-    t = str(hodnota).strip().replace(" ", "").replace(" ", "")
+    t = re.sub(r"[\s\u00a0\u2009\u202f]", "", str(hodnota))
     if not t:
         return None
     if "," in t and "." in t:
@@ -187,22 +187,47 @@ def _vlozeny_isdoc(data: bytes) -> Optional[bytes]:
     return None
 
 
-def _text_pdf(data: bytes) -> str:
+def _text_pdf(data: bytes, rozlozeni: bool = True) -> str:
+    """Text PDF. V režimu rozvržení zůstávají sloupce tabulky na řádku vedle sebe (lépe se čtou položky)."""
     from pypdf import PdfReader
     reader = PdfReader(io.BytesIO(data))
-    return "\n".join((p.extract_text() or "") for p in reader.pages)
+    stranky = []
+    for p in reader.pages:
+        try:
+            t = p.extract_text(extraction_mode="layout") if rozlozeni else p.extract_text()
+        except Exception:
+            t = p.extract_text()
+        stranky.append(t or "")
+    return "\n".join(stranky)
 
 
-RE_CASTKA = re.compile(r"(?<![\w,.])-?\d{1,3}(?:[  ]\d{3})*(?:,\d{2}|\.\d{2})(?![\d])|(?<![\w,.])-?\d+(?:,\d{2}|\.\d{2})(?![\d])")
-RE_SAZBA = re.compile(r"(?<!\d)(21|12|15|10|0)\s?%")
+RE_CASTKA = re.compile(r"(?<![\w,.])-?\d{1,3}(?:[ \u00a0\u2009\u202f]\d{3})*(?:,\d{2}|\.\d{2})(?![\d])|(?<![\w,.])-?\d+(?:,\d{2}|\.\d{2})(?![\d])")
+RE_SAZBA = re.compile(r"(?<![\d,.])(21|12|15|10|0)(?:[.,]00?)?\s?%")
 RE_EAN_POPIS = re.compile(r"(?:EAN|GTIN)\s*:?\s*(?=\d{8,14})", re.I)
-RE_MNOZSTVI = re.compile(r"(?<![\w,.])(\d{1,5}(?:,\d{1,3})?)\s*(ks|kus|kusů|m|bal|sada|pcs)?\.?(?![\w,.])", re.I)
+RE_MNOZSTVI = re.compile(r"(?<![\w,.])(\d{1,5}(?:,\d{1,3})?)\s*(ks|kus|kusů|m|bal|sada|pcs|hod|h)?\.?(?![\w,.])", re.I)
 RE_KOD = re.compile(r"^[A-Z0-9][A-Z0-9\-./]{2,}$")
+RE_SOUHRN = re.compile(r"^\s*(celkem|celkov\w*|součet|soucet|základ|zaklad|sazba|dph|k úhradě|k uhrade|k platbě|zaokrouhlení|zaokrouhleni|zálohy|zalohy|"
+                       r"rekapitulace|mezisoučet|total|summe|uhrazeno|zbývá|zbyva|neplaťte|platba|cena celkem)\b", re.I)
+RE_ICO = re.compile(r"\bIČO?\s*:?\s*(\d(?:\s?\d){7})\b|\bIČ\s*:?\s*(\d(?:\s?\d){7})\b")
+RE_DIC = re.compile(r"\b(?:DIČ|IČ DPH|VAT)\s*:?\s*([A-Z]{2}\s?\d{8,10})\b")
+RE_CISLO = [
+    re.compile(r"(?:číslo|cislo)\s+(?:faktury|dokladu)\s*:?\s*([A-Z]{0,4}[-/]?\d[\w/-]{3,})", re.I),
+    re.compile(r"(?:faktura|daňový doklad|danovy doklad|invoice|rechnung|predfakt[úu]ra|zálohová faktura|dobropis)\b[^\n]{0,30}?"
+               r"(?:č\.|číslo|cislo|no\.?|nr\.?|number|#)\s*:?\s*([A-Z]{0,4}[-/]?\d[\w/-]{3,})", re.I),
+    re.compile(r"(?:faktura|daňový doklad k přijaté platbě|daňový doklad|invoice)\s*(?:–|-)?\s*(?:daňový doklad)?\s{2,}([A-Z]{0,4}\d[\w/-]{4,})", re.I),
+    re.compile(r"(?:variabilní symbol|variabilni symbol|variabilný symbol|VS)\s*:?\s*(\d{4,10})", re.I),
+]
 
 
-def _rozeber_radek(radek: str) -> Optional[Polozka]:
-    """Řádek položky: množství × cena ≈ celkem, celkem je obvykle poslední částka na řádku."""
+RE_HLAVICKA = re.compile(r"(položk|polozk|název|nazev|označení dodávky|popis|služb|zboží|zbozi|description|artikel|bezeichnung|množství|mnozstvi|počet|pocet)", re.I)
+
+
+def _rozeber_radek(radek: str, v_tabulce: bool = True, predchozi: Optional[str] = None) -> Optional[Polozka]:
+    """Řádek položky: množství × cena ≈ celkem, celkem je obvykle poslední částka na řádku.
+    Řádek bez množství (služby) se bere jako 1 ks, když má sazbu DPH a název."""
     s = RE_EAN_POPIS.sub(" ", radek)
+    if RE_SOUHRN.match(s):
+        return None
     ean = next((e for e in RE_EAN.findall(s) if ean_z_textu(e)), None)
     if ean:
         s = s.replace(ean, " ")
@@ -210,50 +235,108 @@ def _rozeber_radek(radek: str) -> Optional[Polozka]:
     s = RE_SAZBA.sub(" ", s)
     castky = [(m.start(), _halere(m.group())) for m in RE_CASTKA.finditer(s)]
     castky = [(i, c) for i, c in castky if c is not None and c > 0]
-    if len(castky) < 2:
+    if not castky:
         return None
     bez_castek = RE_CASTKA.sub(lambda m: " " * len(m.group()), s)
+    bez_castek = re.sub(r"\b\d{1,2}\.\d{1,2}\.\d{4}\b(\s*-\s*\d{1,2}\.\d{1,2}\.\d{4})?", " ", bez_castek)   # období u služeb
+    s_dph = (1 + int(sazba.group(1)) / 100) if sazba else None
+
+    def hotova(nazev_text: str, q: float, p: int, t: int, jednotka: Optional[str]) -> Optional[Polozka]:
+        tokeny = nazev_text.split()
+        kod = None
+        if len(tokeny) > 1 and RE_KOD.match(tokeny[0]) and re.search(r"[\d\-]", tokeny[0]):
+            kod = tokeny.pop(0)
+        nazev = re.sub(r"(?<!\w)(Kč|CZK)(?!\w)", " ", " ".join(tokeny))
+        nazev = re.sub(r"\s{2,}", " ", re.sub(r"(\s-)+\s*$", " ", nazev)).strip(" .,:;-\t")
+        if not re.search(r"[A-Za-zÁ-ž]{3}", re.sub(r"\b(kód|kod|code|art\.?|č\.)\b", "", nazev, flags=re.I)):
+            nazev = ""                                 # jen popisky sloupců – název bývá o řádek výš
+        if len(nazev) < 3 and not predchozi:
+            return None
+        nazev = nazev if len(nazev) >= 3 else predchozi
+        # Když jsou na řádku ceny s DPH i bez, bereme bez DPH.
+        if s_dph:
+            mensi = [c for _, c in castky if abs(c * s_dph - t) <= max(2, t * 0.005)]
+            if mensi:
+                t = mensi[0]
+                p = int(round(t / q))
+        return Polozka(nazev=nazev, mnozstvi=q, cena_bez_dph=p, celkem_bez_dph=t,
+                       sazba_dph=int(sazba.group(1)) if sazba else None,
+                       jednotka=(jednotka or "").lower() or None, kod_dodavatele=kod, ean=ean)
+
     mnozstvi = [(m, _cislo(m.group(1))) for m in RE_MNOZSTVI.finditer(bez_castek)]
-    for ti in range(len(castky) - 1, 0, -1):
-        t = castky[ti][1]
-        for _, p in castky[:ti]:
-            for m, q in reversed(mnozstvi):
-                if q and 0 < q <= 10000 and abs(q * p - t) <= max(2, t * 0.005):
-                    nazev = (bez_castek[:m.start()] + " " + bez_castek[m.end():])
-                    tokeny = nazev.split()
-                    kod = None
-                    if len(tokeny) > 1 and RE_KOD.match(tokeny[0]) and re.search(r"[\d\-]", tokeny[0]):
-                        kod = tokeny.pop(0)
-                    nazev = " ".join(tokeny).strip(" .,:;-\t")
-                    if len(nazev) < 3:
-                        return None
-                    return Polozka(nazev=nazev, mnozstvi=q, cena_bez_dph=p, celkem_bez_dph=t,
-                                   sazba_dph=int(sazba.group(1)) if sazba else None,
-                                   jednotka=(m.group(2) or "").lower() or None, kod_dodavatele=kod, ean=ean)
+    if len(castky) >= 2:
+        for ti in range(len(castky) - 1, 0, -1):
+            t = castky[ti][1]
+            for _, p in castky[:ti]:
+                for m, q in reversed(mnozstvi):
+                    if q and 0 < q <= 10000 and abs(q * p - t) <= max(2, t * 0.005):
+                        return hotova(bez_castek[:m.start()] + " " + bez_castek[m.end():], q, p, t, m.group(2))
+    if v_tabulce and sazba and re.match(r"^\s{0,6}\S", radek):          # služba bez množství: název, sazba DPH, částka
+        t = castky[-1][1] if not s_dph else next((c for _, c in castky if any(abs(c * s_dph - d) <= max(2, d * 0.005) for _, d in castky)), castky[0][1])
+        nazev = bez_castek[:castky[0][0]]
+        if len(nazev.strip()) >= 6:
+            return hotova(nazev, 1, t, t, None)
     return None
 
 
-def nacti_pdf_text(data: bytes) -> Faktura:
+def nacti_pdf_text(data: bytes, nastaveni: Optional[dict] = None) -> Faktura:
     """Odhad položek z textu PDF – pro faktury bez ISDOC, když není nastavené čtení přes Claude."""
+    nastaveni = nastaveni or {}
     text = _text_pdf(data)
     f = Faktura(zdroj="text")
-    f.varovani.append("Položky jsou odhadnuté z textu PDF. Zkontrolujte množství a ceny.")
-    m = (re.search(r"(?:faktur\w*|doklad\w*)[^\n]*?č(?:íslo|\.)?\s*(?:faktury|dokladu)?\s*:?\s*([A-Z0-9][A-Z0-9/\-]{3,})", text, re.I)
-         or re.search(r"(?:variabilní symbol|VS)\s*:?\s*(\d{4,})", text, re.I))
-    if m:
-        f.cislo = m.group(1)
-    m = re.search(r"IČO?\s*:?\s*(\d{8})", text)
-    if m:
-        f.dodavatel_ico = m.group(1)
-    m = re.search(r"Dodavatel\s*:?\s*([^\n,]{3,80})", text, re.I)
-    if m:
-        f.dodavatel = m.group(1).strip()
+    f.varovani.append("Položky jsou odhadnuté z textu PDF. Zkontrolujte množství a ceny. Přesně (i naskenované PDF) "
+                      "přečte fakturu Claude, když je v Nastavení → Faktury zadaný API klíč.")
+    vlastni_ico = re.sub(r"\D", "", nastaveni.get("firma_ico") or "")
+    vlastni_dic = re.sub(r"\s", "", nastaveni.get("firma_dic") or "").upper()
+    for r in RE_CISLO:
+        m = next((m for m in r.finditer(text) if len(re.sub(r"\D", "", m.group(1))) >= 4 and not re.search(r"sb\.?$", m.group(1), re.I)), None)
+        if m:
+            f.cislo = m.group(1).strip("/-")
+            break
+    ica = [re.sub(r"\s", "", m.group(1) or m.group(2)) for m in RE_ICO.finditer(text)]
+    f.dodavatel_ico = next((i for i in ica if i != vlastni_ico), None)
+    dic = [re.sub(r"\s", "", m.group(1)).upper() for m in RE_DIC.finditer(text)]
+    f.dodavatel_dic = next((d for d in dic if d != vlastni_dic and not (vlastni_ico and vlastni_ico in d)), None)
+    radky_textu = text.splitlines()
+    for i, radek in enumerate(radky_textu):         # „Dodavatel: Název“, nebo štítek a název na dalším řádku (dvousloupcové PDF)
+        m = re.search(r"Dod[aá]vate[lľ]\w*\s*:?", radek, re.I)
+        if not m:
+            continue
+        zbytek = re.split(r"\s{3,}", radek[m.end():].strip())[0] if radek[m.end():].strip() else ""
+        if not zbytek or re.match(r"(odběratel|odberatel|odberateľ|kupující)", zbytek, re.I):
+            sloupec = m.start()
+            dalsi = next((r for r in radky_textu[i + 1:i + 4] if r.strip()), "")
+            zbytek = re.split(r"\s{3,}", dalsi[max(0, sloupec - 2):].strip() if len(dalsi) > sloupec else dalsi.strip())[0]
+        kand = re.split(r",\s+(?=[^,]*\d)|,?\s+IČ", zbytek.strip())[0].strip(" :,")
+        if len(kand) >= 3 and not re.match(r"(odběratel|odberatel|odberateľ|daňový|faktura|sídlo|kontakt)", kand, re.I):
+            f.dodavatel = kand
+            break
+    if not f.dodavatel:
+        m = re.search(r"([^\n]{3,80}?(?:s\.\s?r\.\s?o\.|a\.\s?s\.|spol\. s r\. o\.|GmbH|k\.\s?s\.|v\.\s?o\.\s?s\.))", text)
+        f.dodavatel = m.group(1).strip() if m else None
+    # Řádky bez množství (služby) se berou jen v tabulce položek: od záhlaví (Položka, Název, Popis…) do prvního součtu.
+    v_tabulce = False
+    predchozi = None                            # text bez částek o řádek výš – u dvouřádkových položek je tam název
     for radek in text.splitlines():
-        p = _rozeber_radek(radek)
+        if not radek.strip():
+            continue
+        if not RE_CASTKA.search(radek) and RE_HLAVICKA.search(radek):
+            v_tabulce, predchozi = True, None
+            continue
+        if RE_SOUHRN.match(radek):
+            v_tabulce, predchozi = False, None
+            continue
+        p = _rozeber_radek(radek, v_tabulce, predchozi)
         if p:
             f.polozky.append(p)
+            predchozi = None
+        elif not RE_CASTKA.search(radek):
+            t = re.split(r"\s{3,}", radek.strip())[0].strip()
+            predchozi = t if re.search(r"[A-Za-zÁ-ž]{3}", t) and len(t) >= 6 else None
     if not f.polozky:
         f.varovani.append("V textu PDF se nepodařilo najít žádné položky. Pomůže ISDOC od dodavatele nebo API klíč pro čtení přes Claude.")
+    if len(text.strip()) < 50:
+        f.varovani.append("PDF je naskenované (obrázek bez textu). Přečte ho jen Claude – zadejte API klíč v Nastavení → Faktury.")
     return f
 
 
@@ -357,7 +440,7 @@ def nacti(nazev: str, data: bytes, nastaveni: dict) -> Faktura:
     klic = (nastaveni.get("ai_api_klic") or "").strip()
     if klic:
         return nacti_pdf_ai(data, klic, nastaveni.get("ai_model") or "claude-opus-5-5")
-    return nacti_pdf_text(data)
+    return nacti_pdf_text(data, nastaveni)
 
 
 # --------------------------------------------------------------------------- párování

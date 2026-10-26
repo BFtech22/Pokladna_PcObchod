@@ -30,7 +30,7 @@ def souhrn(con: sqlite3.Connection, datum: str) -> dict:
         "LEFT JOIN uzivatele u ON u.id = p.uzivatel_id WHERE p.cas LIKE ? GROUP BY p.uzivatel_id", (vzor,))]
     faktury = [dict(r) for r in con.execute(
         "SELECT forma_uhrady, COUNT(*) AS pocet, SUM(celkem) AS celkem FROM faktury_vydane "
-        "WHERE datum_vystaveni = ? AND stav != 'STORNO' GROUP BY forma_uhrady", (datum,))]
+        "WHERE datum_vystaveni = ? AND stav != 'STORNO' AND typ = 'FAKTURA' GROUP BY forma_uhrady", (datum,))]
     return {"datum": datum, "platby": platby, "typy": typy, "dph": _dph(con, vzor), "zaokrouhleni": zaokr,
             "eet": eet, "prodavaci": prodavaci, "faktury": faktury,
             "celkem": sum((v["celkem"] or 0) for v in platby.values())}

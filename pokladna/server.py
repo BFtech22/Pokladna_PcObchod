@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import base64
 import binascii
+import calendar
 import json
 import logging
+import math
 import os
 import re
 import secrets
@@ -23,7 +25,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import db, fakturace, faktury, kasa, posta, zaloha
+from . import banka, db, export_ucetni, fakturace, faktury, kasa, posta, servis, zaloha
 from . import uzaverka as uzaverky
 from .web import COOKIE, con_dep, spravce, uzivatel
 from .eet_fronta import sluzba as eet
@@ -49,6 +51,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Pokladna PcObchod", lifespan=lifespan, docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 app.include_router(kasa.router)
+app.include_router(servis.router)
 
 
 # --------------------------------------------------------------------------- pomocné
@@ -77,6 +80,12 @@ def prodej_dict(con: sqlite3.Connection, pid: int) -> dict:
     d["eet_varovani"] = json.loads(p["eet_varovani"]) if p["eet_varovani"] else []
     fv = con.execute("SELECT id, cislo FROM faktury_vydane WHERE prodej_id = ?", (pid,)).fetchone()
     d["faktura"] = dict(fv) if fv else None
+    d["serie"] = [dict(x) for x in con.execute("SELECT sn, zbozi_id, nazev, zaruka_do FROM serie WHERE prodej_id = ? ORDER BY id",
+                                               (p["storno_k"] or pid,))]
+    zaruky = {r["id"]: r["zaruka_mesice"] for r in con.execute(
+        "SELECT id, zaruka_mesice FROM zbozi WHERE id IN (SELECT zbozi_id FROM prodej_polozky WHERE prodej_id = ?)", (pid,))}
+    for x in d["polozky"]:
+        x["zaruka_mesice"] = zaruky.get(x["zbozi_id"])
     return d
 
 
@@ -105,7 +114,8 @@ def stav(request: Request, con: sqlite3.Connection = Depends(con_dep)):
         "uzivatel": {"id": u["id"], "jmeno": u["jmeno"], "role": u["role"]} if u else None,
         "firma": {k: nast.get(k) for k in ("firma_nazev", "firma_ico", "firma_dic", "firma_adresa",
                                           "provozovna", "telefon", "platce_dph", "zaokrouhlovat_hotovost",
-                                          "uctenka_paticka", "faktura_ucet", "faktura_pata", "faktura_splatnost_dni")},
+                                          "uctenka_paticka", "faktura_ucet", "faktura_pata", "faktura_splatnost_dni",
+                                          "servis_podminky", "zarucni_podminky", "servis_lhuta_dni", "stitek_format")},
         "eet_rezim": nast.get("eet_rezim"),
     }
 
@@ -160,6 +170,8 @@ class ZboziVstup(BaseModel):
     poznamka: Optional[str] = None
     eany: List[str] = []
     pocatecni_stav: Optional[float] = None
+    seriova_cisla: bool = False                 # při prodeji se načte SN / IMEI každého kusu
+    zaruka_mesice: int = Field(default=24, ge=0, le=120)
 
 
 def _uloz_eany(con: sqlite3.Connection, zid: int, eany: List[str]) -> None:
@@ -230,10 +242,10 @@ def nove_zbozi(data: ZboziVstup, u=Depends(spravce), con: sqlite3.Connection = D
         try:
             zid = con.execute(
                 "INSERT INTO zbozi (nazev, kod, kategorie, cena, sazba_dph, nakupni_cena, jednotka, min_stav, "
-                "aktivni, poznamka, vytvoreno, upraveno) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                "aktivni, poznamka, vytvoreno, upraveno, seriova_cisla, zaruka_mesice) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (data.nazev.strip(), (data.kod or "").strip() or None, data.kategorie, data.cena, data.sazba_dph,
                  data.nakupni_cena, data.jednotka, data.min_stav, int(data.aktivni), data.poznamka,
-                 db.ted(), db.ted())).lastrowid
+                 db.ted(), db.ted(), int(data.seriova_cisla), data.zaruka_mesice)).lastrowid
         except sqlite3.IntegrityError:
             raise HTTPException(409, f"Kód {data.kod} už existuje")
         _uloz_eany(con, zid, data.eany)
@@ -248,16 +260,47 @@ def uprav_zbozi(zid: int, data: ZboziVstup, u=Depends(spravce), con: sqlite3.Con
         try:
             n = con.execute(
                 "UPDATE zbozi SET nazev=?, kod=?, kategorie=?, cena=?, sazba_dph=?, nakupni_cena=?, jednotka=?, "
-                "min_stav=?, aktivni=?, poznamka=?, upraveno=? WHERE id=?",
+                "min_stav=?, aktivni=?, poznamka=?, upraveno=?, seriova_cisla=?, zaruka_mesice=? WHERE id=?",
                 (data.nazev.strip(), (data.kod or "").strip() or None, data.kategorie, data.cena, data.sazba_dph,
                  data.nakupni_cena, data.jednotka, data.min_stav, int(data.aktivni), data.poznamka,
-                 db.ted(), zid)).rowcount
+                 db.ted(), int(data.seriova_cisla), data.zaruka_mesice, zid)).rowcount
         except sqlite3.IntegrityError:
             raise HTTPException(409, f"Kód {data.kod} už existuje")
         if not n:
             raise HTTPException(404, "Zboží nenalezeno")
         _uloz_eany(con, zid, data.eany)
     return zbozi_dict(con, con.execute("SELECT * FROM zbozi WHERE id = ?", (zid,)).fetchone())
+
+
+def ean13(zaklad12: str) -> str:
+    """Doplní kontrolní číslici EAN-13."""
+    soucet = sum(int(c) * (3 if i % 2 else 1) for i, c in enumerate(zaklad12))
+    return zaklad12 + str((10 - soucet % 10) % 10)
+
+
+class InterniEanVstup(BaseModel):
+    ids: List[int] = []                         # prázdné = všechno aktivní zboží bez čárového kódu
+
+
+@app.post("/api/zbozi/interni-ean")
+def interni_ean(data: InterniEanVstup, u=Depends(spravce), con: sqlite3.Connection = Depends(con_dep)):
+    """Interní EAN 29xxxxxxxxxx (rozsah pro vnitřní potřebu prodejny) pro zboží bez čárového kódu – pak jde tisknout štítek."""
+    prideleno = []
+    with db.transakce(con):
+        ids = data.ids or [r[0] for r in con.execute(
+            "SELECT id FROM zbozi WHERE aktivni = 1 AND id NOT IN (SELECT zbozi_id FROM zbozi_ean) ORDER BY id")]
+        for zid in ids:
+            if not con.execute("SELECT 1 FROM zbozi WHERE id = ?", (zid,)).fetchone():
+                raise HTTPException(404, f"Zboží {zid} neexistuje")
+            if con.execute("SELECT 1 FROM zbozi_ean WHERE zbozi_id = ?", (zid,)).fetchone():
+                continue
+            while True:
+                kod = ean13("29" + f"{db.dalsi_cislo(con, 'interni-ean'):010d}")
+                if not con.execute("SELECT 1 FROM zbozi_ean WHERE ean = ?", (kod,)).fetchone():
+                    break
+            con.execute("INSERT INTO zbozi_ean (ean, zbozi_id) VALUES (?, ?)", (kod, zid))
+            prideleno.append({"zbozi_id": zid, "ean": kod})
+    return {"prideleno": prideleno}
 
 
 # --------------------------------------------------------------------------- prodej
@@ -268,6 +311,7 @@ class PolozkaProdeje(BaseModel):
     mnozstvi: float = Field(ge=-99999, le=99999)
     cena: Optional[int] = None           # jednotková cena s DPH; když chybí, bere se z katalogu
     sazba_dph: Optional[int] = None
+    serie: List[str] = []                # sériová čísla / IMEI prodaných kusů
 
 
 class ProdejVstup(BaseModel):
@@ -276,8 +320,9 @@ class ProdejVstup(BaseModel):
     prijato: Optional[int] = None
 
 
-def _radky_dokladu(con: sqlite3.Connection, polozky: List[PolozkaProdeje]) -> list:
-    """Řádky prodejky nebo faktury s cenami z katalogu (případně ručně změněnými)."""
+def _radky_dokladu(con: sqlite3.Connection, polozky: List[PolozkaProdeje], pdp: bool = False, serie_povinne: bool = True) -> list:
+    """Řádky prodejky nebo faktury s cenami z katalogu (případně ručně změněnými).
+    Při přenesené daňové povinnosti (pdp) je katalogová cena přepočtená na cenu bez DPH."""
     radky = []
     for pol in polozky:
         if pol.mnozstvi == 0:
@@ -288,11 +333,16 @@ def _radky_dokladu(con: sqlite3.Connection, polozky: List[PolozkaProdeje]) -> li
                 raise HTTPException(400, f"Zboží {pol.zbozi_id} neexistuje")
             ean = con.execute("SELECT ean FROM zbozi_ean WHERE zbozi_id = ? ORDER BY rowid LIMIT 1",
                               (z["id"],)).fetchone()
-            cena = z["cena"] if pol.cena is None else pol.cena
+            katalog = int(round(z["cena"] / (1 + z["sazba_dph"] / 100))) if pdp else z["cena"]
+            cena = katalog if pol.cena is None else pol.cena
+            serie = [x.strip() for x in pol.serie if x.strip()]
+            if serie_povinne and z["seriova_cisla"] and pol.mnozstvi > 0 and len(serie) != int(pol.mnozstvi):
+                raise HTTPException(400, f"U „{z['nazev']}“ načtěte sériové číslo / IMEI každého kusu ({len(serie)} z {pol.mnozstvi:g})")
             radky.append(dict(zbozi_id=z["id"], nazev=z["nazev"], ean=ean[0] if ean else None,
                               mnozstvi=round(pol.mnozstvi, 3), cena=cena, jednotka=z["jednotka"],
-                              puvodni_cena=z["cena"] if cena != z["cena"] else None,
-                              sazba_dph=z["sazba_dph"]))
+                              puvodni_cena=katalog if cena != katalog else None,
+                              sazba_dph=z["sazba_dph"], serie=serie if pol.mnozstvi > 0 else [],
+                              zaruka_mesice=z["zaruka_mesice"]))
         else:
             if not (pol.nazev and pol.cena is not None):
                 raise HTTPException(400, "Položka mimo katalog potřebuje název a cenu")
@@ -304,6 +354,19 @@ def _radky_dokladu(con: sqlite3.Connection, polozky: List[PolozkaProdeje]) -> li
     for r in radky:
         r["celkem"] = int(round(r["cena"] * r["mnozstvi"]))
     return radky
+
+
+def zapis_serie(con: sqlite3.Connection, radky: list, cas: str, prodej_id: Optional[int] = None, faktura_id: Optional[int] = None) -> None:
+    """Uloží prodaná sériová čísla se zárukou (volat v transakci)."""
+    for r in radky:
+        for sn in r.get("serie") or []:
+            mesice = r.get("zaruka_mesice") or 0
+            d = date.fromisoformat(cas[:10])
+            m = d.month - 1 + mesice
+            rok, mes = d.year + m // 12, m % 12 + 1
+            konec = date(rok, mes, min(d.day, calendar.monthrange(rok, mes)[1])) if mesice else None
+            con.execute("INSERT INTO serie (sn, zbozi_id, nazev, prodej_id, faktura_id, cas, zaruka_do) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (sn, r["zbozi_id"], r["nazev"], prodej_id, faktura_id, cas, konec.isoformat() if konec else None))
 
 
 def _vloz_prodej(con: sqlite3.Connection, platba: str, prijato: Optional[int], radky: list, u, nast: dict) -> tuple:
@@ -341,6 +404,7 @@ def _vloz_prodej(con: sqlite3.Connection, platba: str, prijato: Optional[int], r
              r["sazba_dph"], r["celkem"]))
         if r["zbozi_id"] is not None:
             db.pohyb(con, r["zbozi_id"], -r["mnozstvi"], "PRODEJ", cislo, u["id"])
+    zapis_serie(con, radky, cas, prodej_id=pid)
     return pid, eet_stav
 
 
@@ -693,6 +757,34 @@ def skladove_pohyby(od: Optional[str] = None, do: Optional[str] = None, typ: str
     return [dict(r) for r in con.execute(sql, par)]
 
 
+@app.get("/api/sklad/objednavka")
+def navrh_objednavky(u=Depends(uzivatel), con: sqlite3.Connection = Depends(con_dep)):
+    """Zboží na minimálním stavu nebo pod ním s návrhem, kolik objednat a u koho (podle posledního příjmu)."""
+    dnes = date.fromisoformat(db.ted()[:10])
+    od30, od90 = (dnes - timedelta(days=30)).isoformat(), (dnes - timedelta(days=90)).isoformat()
+    out = []
+    for z in con.execute("SELECT * FROM zbozi WHERE aktivni = 1 AND min_stav > 0 AND stav <= min_stav ORDER BY nazev COLLATE NOCASE").fetchall():
+        prodano = lambda od: -con.execute("SELECT COALESCE(SUM(mnozstvi), 0) FROM pohyby WHERE zbozi_id = ? AND typ = 'PRODEJ' AND cas >= ?",
+                                          (z["id"], od)).fetchone()[0]
+        p30, p90 = max(prodano(od30), 0), max(prodano(od90), 0)
+        posl = con.execute(
+            "SELECT p.dodavatel, p.dodavatel_ico, pp.nakupni_cena, p.cas FROM prijemka_polozky pp JOIN prijemky p ON p.id = pp.prijemka_id "
+            "WHERE pp.zbozi_id = ? AND p.stornovano = 0 ORDER BY p.id DESC LIMIT 1", (z["id"],)).fetchone()
+        kod = None
+        if posl:
+            k = con.execute("SELECT kod FROM dodavatel_kody WHERE dodavatel = ? AND zbozi_id = ? ORDER BY upraveno DESC LIMIT 1",
+                            (faktury.klic_dodavatele(posl["dodavatel_ico"], posl["dodavatel"]), z["id"])).fetchone()
+            kod = k[0] if k else None
+        cil = max(2 * z["min_stav"], z["min_stav"] + p30)      # dvojnásobek minima, u rychloobrátkového zboží minimum + měsíční prodej
+        ean = con.execute("SELECT ean FROM zbozi_ean WHERE zbozi_id = ? ORDER BY rowid LIMIT 1", (z["id"],)).fetchone()
+        out.append({"zbozi_id": z["id"], "nazev": z["nazev"], "kod": z["kod"], "ean": ean[0] if ean else None, "jednotka": z["jednotka"],
+                    "stav": z["stav"], "min_stav": z["min_stav"], "prodano_30": p30, "prodano_90": p90,
+                    "navrh": max(math.ceil(cil - z["stav"]), 1), "nakupni_cena": (posl["nakupni_cena"] if posl else None) or z["nakupni_cena"],
+                    "dodavatel": posl["dodavatel"] if posl else None, "dodavatel_ico": posl["dodavatel_ico"] if posl else None,
+                    "posledni_prijem": posl["cas"][:10] if posl else None, "kod_dodavatele": kod})
+    return out
+
+
 class KorekceVstup(BaseModel):
     zbozi_id: int
     novy_stav: float
@@ -792,8 +884,9 @@ def _uloz_odberatele(con: sqlite3.Connection, o: OdberatelVstup) -> int:
 
 @app.get("/api/odberatele")
 def seznam_odberatelu(q: str = "", u=Depends(uzivatel), con: sqlite3.Connection = Depends(con_dep)):
-    sql = ("SELECT o.*, (SELECT COUNT(*) FROM faktury_vydane f WHERE f.odberatel_id = o.id AND f.stav != 'STORNO') AS faktur, "
-           "(SELECT COALESCE(SUM(celkem), 0) FROM faktury_vydane f WHERE f.odberatel_id = o.id AND f.stav = 'NEUHRAZENO') AS dluzi "
+    sql = ("SELECT o.*, (SELECT COUNT(*) FROM faktury_vydane f WHERE f.odberatel_id = o.id AND f.stav != 'STORNO' AND f.typ = 'FAKTURA') AS faktur, "
+           "(SELECT COALESCE(SUM(celkem), 0) FROM faktury_vydane f WHERE f.odberatel_id = o.id AND f.stav = 'NEUHRAZENO' "
+           "AND f.typ IN ('FAKTURA', 'ZALOHOVA')) AS dluzi "
            "FROM odberatele o")
     par: list = []
     if q.strip():
@@ -829,16 +922,21 @@ def ares(ico: str, u=Depends(uzivatel)):
 
 
 class FakturaVydanaVstup(BaseModel):
+    typ: str = Field(default="FAKTURA", pattern="^(FAKTURA|ZALOHOVA|OPRAVNY|NABIDKA)$")
     odberatel: OdberatelVstup
     ulozit_kontakt: bool = True
     forma_uhrady: str = Field(pattern="^(PREVOD|HOTOVE|KARTA|DOBIRKA)$")
     datum_vystaveni: Optional[str] = None
     duzp: Optional[str] = None
-    splatnost: Optional[str] = None
+    splatnost: Optional[str] = None             # u nabídky = platnost do
     poznamka: Optional[str] = None
     polozky: List[PolozkaProdeje] = []
     prijato: Optional[int] = None               # hotovost na pokladně
     prodej_id: Optional[int] = None             # faktura k již zaplacené prodejce
+    vazba_id: Optional[int] = None              # nabídka nebo zálohová (u faktury), opravovaná faktura (u opravného dokladu)
+    pdp: bool = False                           # přenesená daňová povinnost: ceny bez DPH
+    duvod_opravy: Optional[str] = None
+    vratit_na_sklad: bool = True                # opravný doklad: vrácené zboží zpět na sklad
 
 
 def _adresa(o) -> str:
@@ -850,19 +948,32 @@ def faktura_dict(con: sqlite3.Connection, fid: int) -> dict:
                     "LEFT JOIN uzivatele u ON u.id = f.uzivatel_id LEFT JOIN prodeje p ON p.id = f.prodej_id "
                     "WHERE f.id = ?", (fid,)).fetchone()
     if f is None:
-        raise HTTPException(404, "Faktura nenalezena")
+        raise HTTPException(404, "Doklad nenalezen")
     d = dict(f)
     d["polozky"] = [dict(x) for x in con.execute("SELECT * FROM faktura_vydana_polozky WHERE faktura_id = ? ORDER BY id", (fid,))]
-    d["dph"] = fakturace.rekap_dph(d["polozky"])
-    d["po_splatnosti"] = d["stav"] == "NEUHRAZENO" and d["splatnost"] < db.ted()[:10]
+    d["dph"] = fakturace.rekap_dph(d["polozky"], bool(d["pdp"]))
+    d["po_splatnosti"] = d["typ"] in ("FAKTURA", "ZALOHOVA") and d["stav"] == "NEUHRAZENO" and d["splatnost"] < db.ted()[:10]
+    v = con.execute("SELECT id, cislo, typ, datum_vystaveni, duzp, celkem, stav FROM faktury_vydane WHERE id = ?",
+                    (d["vazba_id"],)).fetchone() if d["vazba_id"] else None
+    d["vazba"] = dict(v) if v else None
+    d["navazne"] = [dict(r) for r in con.execute(
+        "SELECT id, cislo, typ, datum_vystaveni, celkem, stav FROM faktury_vydane WHERE vazba_id = ? ORDER BY id", (fid,))]
+    d["k_uhrade"] = d["celkem"] + sum(n["celkem"] for n in d["navazne"] if n["typ"] == "OPRAVNY" and n["stav"] != "STORNO")
     return d
 
 
+SKUPINY_DOKLADU = {"FAKTURA": ("FAKTURA",), "ZALOHOVA": ("ZALOHOVA", "DDZP"), "OPRAVNY": ("OPRAVNY",), "NABIDKA": ("NABIDKA",),
+                   "vse": tuple(fakturace.TYPY)}
+
+
 @app.get("/api/faktury-vydane")
-def seznam_faktur(filtr: str = "vse", q: str = "", u=Depends(uzivatel), con: sqlite3.Connection = Depends(con_dep)):
+def seznam_faktur(typ: str = "FAKTURA", filtr: str = "vse", q: str = "", u=Depends(uzivatel),
+                  con: sqlite3.Connection = Depends(con_dep)):
     dnes = db.ted()[:10]
-    sql = "SELECT * FROM faktury_vydane WHERE 1=1"
-    par: list = []
+    typy = SKUPINY_DOKLADU.get(typ, ("FAKTURA",))
+    misto = ", ".join("?" * len(typy))
+    sql = f"SELECT * FROM faktury_vydane WHERE typ IN ({misto})"
+    par: list = list(typy)
     if filtr == "neuhrazene":
         sql += " AND stav = 'NEUHRAZENO'"
     elif filtr == "po_splatnosti":
@@ -875,13 +986,14 @@ def seznam_faktur(filtr: str = "vse", q: str = "", u=Depends(uzivatel), con: sql
         par += [f"%{q.strip()}%", f"%{db.bez_diakritiky(q.strip())}%", f"{q.strip()}%"]
     rows = [dict(r) for r in con.execute(sql + " ORDER BY id DESC LIMIT 500", par)]
     for r in rows:
-        r["po_splatnosti"] = r["stav"] == "NEUHRAZENO" and r["splatnost"] < dnes
+        r["po_splatnosti"] = r["typ"] in ("FAKTURA", "ZALOHOVA") and r["stav"] == "NEUHRAZENO" and r["splatnost"] < dnes
     s = con.execute(
         "SELECT COALESCE(SUM(CASE WHEN stav = 'NEUHRAZENO' THEN celkem END), 0) AS neuhrazeno, "
         "COALESCE(SUM(CASE WHEN stav = 'NEUHRAZENO' AND splatnost < ? THEN celkem END), 0) AS po_splatnosti, "
         "COUNT(CASE WHEN stav = 'NEUHRAZENO' AND splatnost < ? THEN 1 END) AS pocet_po_splatnosti, "
-        "COALESCE(SUM(CASE WHEN stav != 'STORNO' AND datum_vystaveni LIKE ? THEN celkem END), 0) AS mesic "
-        "FROM faktury_vydane", (dnes, dnes, dnes[:7] + "%")).fetchone()
+        "COUNT(CASE WHEN stav = 'NEUHRAZENO' AND splatnost < ? AND odb_email IS NOT NULL THEN 1 END) AS k_upominani, "
+        f"COALESCE(SUM(CASE WHEN stav != 'STORNO' AND typ != 'DDZP' AND datum_vystaveni LIKE ? THEN celkem END), 0) AS mesic "
+        f"FROM faktury_vydane WHERE typ IN ({misto})", (dnes, dnes, dnes, dnes[:7] + "%", *typy)).fetchone()
     return {"faktury": rows, "souhrn": dict(s)}
 
 
@@ -891,23 +1003,84 @@ def detail_faktury(fid: int, u=Depends(uzivatel), con: sqlite3.Connection = Depe
     nast = db.nastaveni(con)
     iban = fakturace.iban_z_uctu(nast.get("faktura_ucet") or "")
     d["iban"] = iban
-    d["qr"] = bool(iban and d["forma_uhrady"] == "PREVOD" and d["stav"] == "NEUHRAZENO")
+    d["qr"] = bool(iban and fakturace.s_qr(d))
     return d
+
+
+# Variabilní symbol: faktury RRRRnnnn (jako dřív), ostatní řady s vlastní první číslicí, aby se VS nikdy nepotkaly.
+PREDCISLI_VS = {"ZALOHOVA": "9", "OPRAVNY": "8", "NABIDKA": "7", "DDZP": "6"}
+
+
+def _cislo_dokladu(con: sqlite3.Connection, typ: str, nast: dict, rok: str) -> tuple:
+    """(číslo dokladu, variabilní symbol)"""
+    citac = "faktura-" + rok if typ == "FAKTURA" else f"doklad-{typ}-{rok}"
+    n = db.dalsi_cislo(con, citac)
+    cislo = f"{fakturace.rada(typ, nast)}{rok}{n:04d}"
+    vs = re.sub(r"\D", "", cislo)[-10:] if typ == "FAKTURA" else f"{PREDCISLI_VS[typ]}{rok[2:]}{n:05d}"
+    return cislo, vs
+
+
+def _uhrad(con: sqlite3.Connection, fid: int, datum: str, uid: Optional[int]) -> None:
+    """Označí doklad jako uhrazený. U zálohové faktury plátce vystaví daňový doklad k přijaté platbě (volat v transakci)."""
+    f = con.execute("SELECT * FROM faktury_vydane WHERE id = ?", (fid,)).fetchone()
+    con.execute("UPDATE faktury_vydane SET stav = 'UHRAZENO', datum_uhrady = ? WHERE id = ?", (datum, fid))
+    nast = db.nastaveni(con)
+    if f["typ"] != "ZALOHOVA" or nast.get("platce_dph") != "1":
+        return
+    if con.execute("SELECT 1 FROM faktury_vydane WHERE vazba_id = ? AND typ = 'DDZP'", (fid,)).fetchone():
+        return
+    dnes = db.ted()[:10]
+    cislo, _ = _cislo_dokladu(con, "DDZP", nast, dnes[:4])
+    did = con.execute(
+        "INSERT INTO faktury_vydane (cislo, vs, odberatel_id, odb_nazev, odb_ico, odb_dic, odb_adresa, odb_email, datum_vystaveni, "
+        "duzp, splatnost, forma_uhrady, celkem, stav, datum_uhrady, uzivatel_id, vytvoreno, typ, vazba_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'UHRAZENO', ?, ?, ?, 'DDZP', ?)",
+        (cislo, f["vs"], f["odberatel_id"], f["odb_nazev"], f["odb_ico"], f["odb_dic"], f["odb_adresa"], f["odb_email"],
+         dnes, datum, datum, f["forma_uhrady"], f["celkem"], datum, uid, db.ted(), fid)).lastrowid
+    for p in con.execute("SELECT * FROM faktura_vydana_polozky WHERE faktura_id = ? ORDER BY id", (fid,)).fetchall():
+        con.execute("INSERT INTO faktura_vydana_polozky (faktura_id, zbozi_id, nazev, mnozstvi, jednotka, cena, sazba_dph, celkem) "
+                    "VALUES (?, NULL, ?, ?, ?, ?, ?, ?)", (did, p["nazev"], p["mnozstvi"], p["jednotka"], p["cena"], p["sazba_dph"], p["celkem"]))
 
 
 @app.post("/api/faktury-vydane")
 def nova_faktura(data: FakturaVydanaVstup, u=Depends(uzivatel), con: sqlite3.Connection = Depends(con_dep)):
     nast = db.nastaveni(con)
+    platce = nast.get("platce_dph") == "1"
+    typ = data.typ
     dnes = db.ted()[:10]
     vystaveni = data.datum_vystaveni or dnes
-    dni = int(nast.get("faktura_splatnost_dni") or 14)
+    dni = int(nast.get("nabidka_platnost_dni" if typ == "NABIDKA" else "faktura_splatnost_dni") or 14)
     splatnost = data.splatnost or (date.fromisoformat(vystaveni) + timedelta(days=dni)).isoformat()
+    forma = data.forma_uhrady
+    if data.pdp:
+        if not platce or typ == "ZALOHOVA" or forma not in ("PREVOD", "DOBIRKA") or data.prodej_id:
+            raise HTTPException(400, "Přenesení daňové povinnosti jde jen u dokladu plátce DPH placeného převodem nebo dobírkou")
+        if not (data.odberatel.dic or "").strip():
+            raise HTTPException(400, "Při přenesení daňové povinnosti musí mít odběratel DIČ")
+    if typ != "FAKTURA" and data.prodej_id:
+        raise HTTPException(400, "K prodejce jde vystavit jen fakturu")
+    if typ == "ZALOHOVA" and forma != "PREVOD":
+        raise HTTPException(400, "Zálohová faktura se platí převodem. Platbu na pokladně udělejte rovnou fakturou.")
+    if typ == "OPRAVNY" and forma in ("HOTOVE", "KARTA"):
+        raise HTTPException(400, "Peníze za nákup na pokladně se vracejí vratkou na pokladně, opravný doklad je pro faktury placené převodem")
+    vazba = None
+    if data.vazba_id:
+        vazba = con.execute("SELECT * FROM faktury_vydane WHERE id = ?", (data.vazba_id,)).fetchone()
+        if vazba is None:
+            raise HTTPException(404, "Navazující doklad nenalezen")
+    if typ == "OPRAVNY":
+        if vazba is None or vazba["typ"] != "FAKTURA" or vazba["stav"] == "STORNO" or vazba["prodej_id"]:
+            raise HTTPException(400, "Opravný doklad jde vystavit jen k faktuře placené převodem nebo dobírkou "
+                                     "(nákup na pokladně se opravuje vratkou)")
+        if not (data.duvod_opravy or "").strip():
+            raise HTTPException(400, "Uveďte důvod opravy")
     eet_pid = None
     with db.transakce(con):
         oid = _uloz_odberatele(con, data.odberatel) if data.ulozit_kontakt else data.odberatel.id
         rok = vystaveni[:4]
-        cislo = f"{nast.get('faktura_rada') or 'FV'}{rok}{db.dalsi_cislo(con, 'faktura-' + rok):04d}"
-        vs = re.sub(r"\D", "", cislo)[-10:]
+        cislo, vs = _cislo_dokladu(con, typ, nast, rok)
+        prodej_id, stav, uhrazeno = None, "NEUHRAZENO", None
+        serie_k_fakture = False
         if data.prodej_id:                      # faktura k zaplacené prodejce: zboží ani EET se znovu neřeší
             p = con.execute("SELECT * FROM prodeje WHERE id = ?", (data.prodej_id,)).fetchone()
             if p is None or p["typ"] != "PRODEJ" or p["stornovano"]:
@@ -920,9 +1093,21 @@ def nova_faktura(data: FakturaVydanaVstup, u=Depends(uzivatel), con: sqlite3.Con
                 radky.append({"zbozi_id": None, "nazev": "Zaokrouhlení", "mnozstvi": 1, "jednotka": None,
                               "cena": p["zaokrouhleni"], "sazba_dph": 0, "celkem": p["zaokrouhleni"]})
         else:
-            radky = _radky_dokladu(con, data.polozky)
-            forma = data.forma_uhrady
-            if forma in ("HOTOVE", "KARTA"):     # placeno hned na pokladně → prodejka s EET
+            radky = _radky_dokladu(con, data.polozky, pdp=data.pdp, serie_povinne=typ == "FAKTURA")
+            if typ == "FAKTURA" and vazba is not None and vazba["typ"] == "ZALOHOVA":
+                if vazba["stav"] != "UHRAZENO":
+                    raise HTTPException(400, f"Zálohová faktura {vazba['cislo']} ještě není zaplacená")
+                if con.execute("SELECT 1 FROM faktury_vydane WHERE vazba_id = ? AND typ = 'FAKTURA' AND stav != 'STORNO'",
+                               (vazba["id"],)).fetchone():
+                    raise HTTPException(409, f"Záloha {vazba['cislo']} už je vyúčtovaná")
+                zdroj = con.execute("SELECT * FROM faktury_vydane WHERE vazba_id = ? AND typ = 'DDZP'", (vazba["id"],)).fetchone() or vazba
+                zpol = [dict(r) for r in con.execute("SELECT * FROM faktura_vydana_polozky WHERE faktura_id = ?", (zdroj["id"],))]
+                for r in fakturace.rekap_dph(zpol):
+                    radky.append({"zbozi_id": None, "nazev": f"Odpočet zálohy {zdroj['cislo']}", "ean": None, "jednotka": None,
+                                  "mnozstvi": 1, "cena": -r["celkem"], "puvodni_cena": None, "sazba_dph": r["sazba"], "celkem": -r["celkem"]})
+            if typ == "OPRAVNY" and sum(r["celkem"] for r in radky) >= 0:
+                raise HTTPException(400, "Opravný doklad musí částku snižovat: zadejte vrácené množství nebo slevu se záporným znaménkem")
+            if typ == "FAKTURA" and forma in ("HOTOVE", "KARTA"):     # placeno hned na pokladně → prodejka s EET
                 prodej_id, eet_stav = _vloz_prodej(con, forma, data.prijato, radky, u, nast)
                 p = con.execute("SELECT * FROM prodeje WHERE id = ?", (prodej_id,)).fetchone()
                 celkem, stav, uhrazeno = p["celkem"], "UHRAZENO", dnes
@@ -931,24 +1116,35 @@ def nova_faktura(data: FakturaVydanaVstup, u=Depends(uzivatel), con: sqlite3.Con
                                   "cena": p["zaokrouhleni"], "sazba_dph": 0, "celkem": p["zaokrouhleni"]})
                 if eet_stav == "CEKA":
                     eet_pid = prodej_id
-            else:                               # převodem / dobírkou: výdej ze skladu, bez EET
-                prodej_id, stav, uhrazeno = None, "NEUHRAZENO", None
+            else:
                 celkem = sum(r["celkem"] for r in radky)
                 for r in radky:
-                    if r["zbozi_id"] is not None:
+                    if r["zbozi_id"] is None:
+                        continue
+                    if typ == "FAKTURA":            # převodem / dobírkou: výdej ze skladu, bez EET
                         db.pohyb(con, r["zbozi_id"], -r["mnozstvi"], "PRODEJ", cislo, u["id"], "faktura")
+                    elif typ == "OPRAVNY" and data.vratit_na_sklad and r["mnozstvi"] < 0:
+                        db.pohyb(con, r["zbozi_id"], -r["mnozstvi"], "PRODEJ", cislo, u["id"], "opravný doklad – vráceno")
+                if typ == "FAKTURA" and celkem <= 0:     # celé zaplaceno zálohou
+                    stav, uhrazeno = "UHRAZENO", vystaveni
+                serie_k_fakture = typ == "FAKTURA"
         o = data.odberatel
         fid = con.execute(
             "INSERT INTO faktury_vydane (cislo, vs, odberatel_id, odb_nazev, odb_ico, odb_dic, odb_adresa, odb_email, "
-            "datum_vystaveni, duzp, splatnost, forma_uhrady, poznamka, celkem, stav, datum_uhrady, prodej_id, uzivatel_id, vytvoreno) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "datum_vystaveni, duzp, splatnost, forma_uhrady, poznamka, celkem, stav, datum_uhrady, prodej_id, uzivatel_id, vytvoreno, "
+            "typ, vazba_id, pdp, duvod_opravy) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (cislo, vs, oid, o.nazev.strip(), (o.ico or "").strip() or None, (o.dic or "").strip() or None, _adresa(o) or None,
              (o.email or "").strip() or None, vystaveni, data.duzp or vystaveni, splatnost, forma,
-             (data.poznamka or "").strip() or None, celkem, stav, uhrazeno, prodej_id, u["id"], db.ted())).lastrowid
+             (data.poznamka or "").strip() or None, celkem, stav, uhrazeno, prodej_id, u["id"], db.ted(),
+             typ, vazba["id"] if vazba is not None else None, int(data.pdp), (data.duvod_opravy or "").strip() or None)).lastrowid
         for r in radky:
             con.execute("INSERT INTO faktura_vydana_polozky (faktura_id, zbozi_id, nazev, mnozstvi, jednotka, cena, sazba_dph, celkem) "
                         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                         (fid, r["zbozi_id"], r["nazev"], r["mnozstvi"], r.get("jednotka"), r["cena"], r["sazba_dph"], r["celkem"]))
+        if serie_k_fakture:
+            zapis_serie(con, radky, db.ted(), faktura_id=fid)
+        if vazba is not None and vazba["typ"] == "NABIDKA" and typ in ("FAKTURA", "ZALOHOVA") and vazba["stav"] == "NEUHRAZENO":
+            con.execute("UPDATE faktury_vydane SET stav = 'UHRAZENO', datum_uhrady = ? WHERE id = ?", (dnes, vazba["id"]))
     if eet_pid:
         eet.odesli_prodej(eet_pid)
     return detail_faktury(fid, u, con)
@@ -961,11 +1157,16 @@ class UhradaVstup(BaseModel):
 
 @app.post("/api/faktury-vydane/{fid}/uhrada")
 def uhrada_faktury(fid: int, data: UhradaVstup, u=Depends(uzivatel), con: sqlite3.Connection = Depends(con_dep)):
-    f = faktura_dict(con, fid)
-    if f["stav"] == "STORNO" or f["prodej_id"]:
-        raise HTTPException(409, "U této faktury nejde úhradu měnit")
-    con.execute("UPDATE faktury_vydane SET stav = ?, datum_uhrady = ? WHERE id = ?",
-                ("UHRAZENO", data.datum or db.ted()[:10], fid) if data.uhrazeno else ("NEUHRAZENO", None, fid))
+    with db.transakce(con):
+        f = faktura_dict(con, fid)
+        if f["stav"] == "STORNO" or f["prodej_id"] or f["typ"] in ("DDZP", "NABIDKA"):
+            raise HTTPException(409, "U tohoto dokladu nejde úhradu měnit")
+        if data.uhrazeno:
+            _uhrad(con, fid, data.datum or db.ted()[:10], u["id"])
+        else:
+            if any(n["typ"] == "DDZP" for n in f["navazne"]):
+                raise HTTPException(409, "K záloze už je vystavený daňový doklad k platbě, úhradu nejde vrátit")
+            con.execute("UPDATE faktury_vydane SET stav = 'NEUHRAZENO', datum_uhrady = NULL WHERE id = ?", (fid,))
     return detail_faktury(fid, u, con)
 
 
@@ -973,11 +1174,15 @@ def uhrada_faktury(fid: int, data: UhradaVstup, u=Depends(uzivatel), con: sqlite
 def storno_faktury(fid: int, u=Depends(uzivatel), con: sqlite3.Connection = Depends(con_dep)):
     with db.transakce(con):
         f = faktura_dict(con, fid)
+        if f["typ"] == "DDZP":
+            raise HTTPException(409, "Daňový doklad k přijaté platbě nejde stornovat")
         if f["stav"] != "NEUHRAZENO" or f["prodej_id"]:
-            raise HTTPException(409, "Stornovat jde jen neuhrazenou fakturu převodem. Zaplacenou vraťte stornem prodejky.")
-        for p in f["polozky"]:
-            if p["zbozi_id"] is not None:
-                db.pohyb(con, p["zbozi_id"], p["mnozstvi"], "STORNO", f["cislo"], u["id"], "storno faktury")
+            raise HTTPException(409, "Stornovat jde jen neuhrazený doklad placený převodem. Zaplacený nákup vraťte stornem prodejky.")
+        aktivni = [n["cislo"] for n in f["navazne"] if n["stav"] != "STORNO"]
+        if aktivni:
+            raise HTTPException(409, f"Na doklad navazuje {', '.join(aktivni)} – nejdřív stornujte ten")
+        for p in con.execute("SELECT zbozi_id, mnozstvi FROM pohyby WHERE doklad = ? AND typ = 'PRODEJ'", (f["cislo"],)).fetchall():
+            db.pohyb(con, p["zbozi_id"], -p["mnozstvi"], "STORNO", f["cislo"], u["id"], "storno dokladu")
         con.execute("UPDATE faktury_vydane SET stav = 'STORNO' WHERE id = ?", (fid,))
     return detail_faktury(fid, u, con)
 
@@ -990,6 +1195,16 @@ def pdf_faktury(fid: int, u=Depends(uzivatel), con: sqlite3.Connection = Depends
     except fakturace.ChybaFakturace as e:
         raise HTTPException(500, str(e))
     return Response(obsah, media_type="application/pdf", headers={"Content-Disposition": f'inline; filename="{f["cislo"]}.pdf"'})
+
+
+@app.get("/api/faktury-vydane/{fid}/isdoc")
+def isdoc_faktury(fid: int, u=Depends(uzivatel), con: sqlite3.Connection = Depends(con_dep)):
+    f = faktura_dict(con, fid)
+    try:
+        obsah = fakturace.isdoc(f, db.nastaveni(con))
+    except fakturace.ChybaFakturace as e:
+        raise HTTPException(400, str(e))
+    return Response(obsah, media_type="application/xml", headers={"Content-Disposition": f'attachment; filename="{f["cislo"]}.isdoc"'})
 
 
 @app.get("/api/faktury-vydane/{fid}/qr.svg")
@@ -1007,14 +1222,168 @@ def odeslat_fakturu(fid: int, data: OdeslatVstup, u=Depends(uzivatel), con: sqli
     f = faktura_dict(con, fid)
     nast = db.nastaveni(con)
     komu = posta.adresy(data.komu or f.get("odb_email") or "")
+    nazev = fakturace.titul(f, nast.get("platce_dph") == "1")
     try:
         obsah = fakturace.pdf(f, nast)
-        posta.odesli(nast, komu, f"Faktura {f['cislo']} – {nast.get('firma_nazev') or ''}".strip(" –"),
+        posta.odesli(nast, komu, f"{nazev} {f['cislo']} – {nast.get('firma_nazev') or ''}".strip(" –"),
                      fakturace.email_html(f, nast, data.zprava or ""), [(f"{f['cislo']}.pdf", obsah, "application/pdf")])
     except (posta.ChybaPosty, fakturace.ChybaFakturace) as e:
         raise HTTPException(400, str(e))
     con.execute("UPDATE faktury_vydane SET odeslano = ? WHERE id = ?", (db.ted(), fid))
     return {"ok": True, "komu": komu}
+
+
+def _posli_upominku(con: sqlite3.Connection, fid: int, nast: dict, komu: Optional[List[str]] = None) -> dict:
+    f = faktura_dict(con, fid)
+    if f["typ"] not in ("FAKTURA", "ZALOHOVA") or f["stav"] != "NEUHRAZENO" or not f["po_splatnosti"]:
+        raise HTTPException(409, f"{f['cislo']} není po splatnosti")
+    komu = komu or posta.adresy(f.get("odb_email") or "")
+    if not komu:
+        raise HTTPException(400, f"{f['cislo']}: odběratel nemá e-mail")
+    dni = (date.fromisoformat(db.ted()[:10]) - date.fromisoformat(f["splatnost"])).days
+    poradi = (f["upominek"] or 0) + 1
+    try:
+        posta.odesli(nast, komu, f"{'Upomínka' if poradi == 1 else f'{poradi}. upomínka'} – faktura {f['cislo']}",
+                     fakturace.upominka_html(f, nast, dni, poradi), [(f"{f['cislo']}.pdf", fakturace.pdf(f, nast), "application/pdf")])
+    except (posta.ChybaPosty, fakturace.ChybaFakturace) as e:
+        raise HTTPException(400, str(e))
+    con.execute("UPDATE faktury_vydane SET upominek = ?, posledni_upominka = ? WHERE id = ?", (poradi, db.ted(), fid))
+    return {"id": fid, "cislo": f["cislo"], "komu": komu, "poradi": poradi}
+
+
+@app.post("/api/faktury-vydane/{fid}/upominka")
+def upominka(fid: int, data: OdeslatVstup, u=Depends(uzivatel), con: sqlite3.Connection = Depends(con_dep)):
+    return _posli_upominku(con, fid, db.nastaveni(con), posta.adresy(data.komu or "") or None)
+
+
+@app.post("/api/faktury-vydane/upominky")
+def upominky_hromadne(u=Depends(uzivatel), con: sqlite3.Connection = Depends(con_dep)):
+    """Upomene všechny faktury po splatnosti s e-mailem, které nedostaly upomínku posledních 7 dní."""
+    nast = db.nastaveni(con)
+    tyden = (date.fromisoformat(db.ted()[:10]) - timedelta(days=7)).isoformat()
+    odeslano, chyby = [], []
+    for r in con.execute("SELECT id, cislo FROM faktury_vydane WHERE typ IN ('FAKTURA', 'ZALOHOVA') AND stav = 'NEUHRAZENO' "
+                         "AND splatnost < ? AND odb_email IS NOT NULL AND (posledni_upominka IS NULL OR posledni_upominka < ?)",
+                         (db.ted()[:10], tyden)).fetchall():
+        try:
+            odeslano.append(_posli_upominku(con, r["id"], nast))
+        except HTTPException as e:
+            chyby.append({"cislo": r["cislo"], "chyba": e.detail})
+    return {"odeslano": odeslano, "chyby": chyby}
+
+
+# --------------------------------------------------------------------------- banka
+
+class VypisVstup(BaseModel):
+    nazev: str = Field(min_length=1, max_length=255)
+    data: str                                   # obsah souboru v base64
+
+
+def _sparuj_pohyb(con: sqlite3.Connection, bid: int, f: dict, datum: str, uid: int) -> None:
+    """Zapíše úhradu faktury z bankovního pohybu (volat v transakci). Platba snížená o dobropis uhradí i opravné doklady."""
+    _uhrad(con, f["id"], datum, uid)
+    con.execute("UPDATE bankovni_pohyby SET faktura_id = ?, poznamka = NULL WHERE id = ?", (f["id"], bid))
+    castka = con.execute("SELECT castka FROM bankovni_pohyby WHERE id = ?", (bid,)).fetchone()[0]
+    if castka != f["celkem"]:
+        con.execute("UPDATE faktury_vydane SET stav = 'UHRAZENO', datum_uhrady = ? WHERE vazba_id = ? AND typ = 'OPRAVNY' "
+                    "AND stav = 'NEUHRAZENO'", (datum, f["id"]))
+
+
+@app.post("/api/banka/import")
+def import_vypisu(vstup: VypisVstup, u=Depends(uzivatel), con: sqlite3.Connection = Depends(con_dep)):
+    try:
+        obsah = base64.b64decode(vstup.data, validate=True)
+        pohyby = banka.cti(vstup.nazev, obsah)
+    except (binascii.Error, ValueError):
+        raise HTTPException(400, "Soubor se nepodařilo přenést")
+    except banka.ChybaVypisu as e:
+        raise HTTPException(400, str(e))
+    if not pohyby:
+        raise HTTPException(400, "Ve výpisu nejsou žádné pohyby. Podporované jsou GPC (ABO), XML camt.053 a CSV.")
+    novych, sparovano, nesparovano = 0, [], []
+    with db.transakce(con):
+        for p in pohyby:
+            bid = con.execute(
+                "INSERT OR IGNORE INTO bankovni_pohyby (otisk, datum, castka, vs, protiucet, nazev, zprava, importovano, soubor) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (p.otisk(), p.datum, p.castka, p.vs, p.protiucet, p.nazev, p.zprava, db.ted(), vstup.nazev)).lastrowid
+            if not con.execute("SELECT changes()").fetchone()[0]:
+                continue                        # už načtený pohyb
+            novych += 1
+            if p.castka <= 0:
+                con.execute("UPDATE bankovni_pohyby SET ignorovano = 1, poznamka = 'odchozí platba' WHERE id = ?", (bid,))
+                continue
+            f, duvod = banka.najdi_fakturu(con, p)
+            if f:
+                _sparuj_pohyb(con, bid, f, p.datum, u["id"])
+                sparovano.append({"cislo": f["cislo"], "castka": p.castka, "datum": p.datum, "nazev": p.nazev})
+            else:
+                con.execute("UPDATE bankovni_pohyby SET poznamka = ? WHERE id = ?", (duvod, bid))
+                nesparovano.append({"id": bid, "castka": p.castka, "datum": p.datum, "vs": p.vs, "nazev": p.nazev, "duvod": duvod})
+    return {"nacteno": len(pohyby), "novych": novych, "sparovano": sparovano, "nesparovano": nesparovano}
+
+
+@app.get("/api/banka/pohyby")
+def bankovni_pohyby(stav: str = "nesparovane", u=Depends(uzivatel), con: sqlite3.Connection = Depends(con_dep)):
+    sql = ("SELECT b.*, f.cislo AS faktura FROM bankovni_pohyby b LEFT JOIN faktury_vydane f ON f.id = b.faktura_id WHERE 1=1")
+    if stav == "nesparovane":
+        sql += " AND b.faktura_id IS NULL AND b.ignorovano = 0 AND b.castka > 0"
+    elif stav == "sparovane":
+        sql += " AND b.faktura_id IS NOT NULL"
+    return [dict(r) for r in con.execute(sql + " ORDER BY b.datum DESC, b.id DESC LIMIT 500")]
+
+
+class ParovaniVstup(BaseModel):
+    faktura_id: Optional[int] = None
+    ignorovat: bool = False
+
+
+@app.post("/api/banka/pohyby/{bid}")
+def parovat_pohyb(bid: int, data: ParovaniVstup, u=Depends(uzivatel), con: sqlite3.Connection = Depends(con_dep)):
+    with db.transakce(con):
+        b = con.execute("SELECT * FROM bankovni_pohyby WHERE id = ?", (bid,)).fetchone()
+        if b is None:
+            raise HTTPException(404, "Pohyb nenalezen")
+        if b["faktura_id"]:
+            raise HTTPException(409, "Pohyb už je spárovaný")
+        if data.ignorovat:
+            con.execute("UPDATE bankovni_pohyby SET ignorovano = 1 WHERE id = ?", (bid,))
+        else:
+            f = con.execute("SELECT * FROM faktury_vydane WHERE id = ?", (data.faktura_id,)).fetchone()
+            if f is None or f["typ"] not in ("FAKTURA", "ZALOHOVA") or f["stav"] != "NEUHRAZENO":
+                raise HTTPException(400, "Vyberte neuhrazenou fakturu nebo zálohu")
+            _sparuj_pohyb(con, bid, dict(f), b["datum"], u["id"])
+    return dict(con.execute("SELECT * FROM bankovni_pohyby WHERE id = ?", (bid,)).fetchone())
+
+
+# --------------------------------------------------------------------------- export pro účetní
+
+@app.get("/api/export/ucetni")
+def export_pro_ucetni(mesic: Optional[str] = None, u=Depends(spravce), con: sqlite3.Connection = Depends(con_dep)):
+    mesic = (mesic or db.ted()[:7])[:7]
+    obsah, nazev = export_ucetni.zip_mesic(con, mesic, db.nastaveni(con), lambda fid: faktura_dict(con, fid))
+    return Response(obsah, media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{nazev}"'})
+
+
+class ExportVstup(BaseModel):
+    mesic: Optional[str] = None
+    komu: Optional[str] = None
+
+
+@app.post("/api/export/ucetni/odeslat")
+def odeslat_export(data: ExportVstup, u=Depends(spravce), con: sqlite3.Connection = Depends(con_dep)):
+    nast = db.nastaveni(con)
+    mesic = (data.mesic or db.ted()[:7])[:7]
+    komu = posta.adresy(data.komu or nast.get("ucetni_email") or "")
+    if not komu:
+        raise HTTPException(400, "Zadejte e-mail účetní (Nastavení → E-mail)")
+    obsah, nazev = export_ucetni.zip_mesic(con, mesic, nast, lambda fid: faktura_dict(con, fid))
+    try:
+        posta.odesli(nast, komu, f"Podklady pro účetnictví {mesic[5:]}/{mesic[:4]} – {nast.get('firma_nazev') or ''}".strip(" –"),
+                     export_ucetni.email_html(con, mesic, nast), [(nazev, obsah, "application/zip")])
+    except posta.ChybaPosty as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "komu": komu, "velikost": len(obsah)}
 
 
 # --------------------------------------------------------------------------- nastavení a uživatelé

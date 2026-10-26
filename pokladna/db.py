@@ -274,6 +274,8 @@ CREATE TABLE IF NOT EXISTS bankovni_pohyby (
     nazev TEXT,
     zprava TEXT,
     faktura_id INTEGER REFERENCES faktury_vydane(id),
+    ignorovano INTEGER NOT NULL DEFAULT 0,     -- nesouvisí s fakturami (nájem, vklad…)
+    poznamka TEXT,                             -- proč se nespárovalo
     importovano TEXT NOT NULL,
     soubor TEXT
 );

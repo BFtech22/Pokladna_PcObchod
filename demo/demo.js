@@ -8,7 +8,7 @@
   'use strict';
 
   const KLIC = 'pokladna.demo.db';
-  const VERZE = 4;
+  const VERZE = 5;
   window.POKLADNA_DEMO = true;
 
   const ZBOZI = [
@@ -27,6 +27,7 @@
     ['Powerbanka 10 000 mAh', '8595680412129', 'Nabíječky', 599, 290, 3, 'ks'],
     ['UTP kabel Cat6 (metráž)', '8595680412136', 'Metráž', 15, 6, 120, 'm'],
     ['Sluchátka do uší s mikrofonem', '8595680412143', 'Audio', 249, 85, 8, 'ks'],
+    ['Mobil Samsung Galaxy A15 128 GB', '8806095351234', 'Telefony', 3990, 2650, 4, 'ks'],
   ];
 
   // Ukázková faktura pro nahrání PDF (PDF se v demu nečte, ISDOC ano).
@@ -61,6 +62,10 @@
         zaloha_heslo: '', zaloha_cas: '21:30', zaloha_slozka: '', zaloha_rclone_cil: '', zaloha_ponechat_lokalne: '14', zaloha_ponechat_venku: '60', zaloha_nazev: '',
         faktura_rada: 'FV', faktura_ucet: '123456789/9999', faktura_splatnost_dni: '14', faktura_pata: 'DEMO – neplatný doklad',
         smtp_server: '', smtp_port: '587', smtp_zabezpeceni: 'STARTTLS', smtp_uzivatel: '', smtp_heslo: '', smtp_odesilatel: '', uzaverka_prijemci: '', uzaverka_auto_cas: '',
+        rada_zalohova: 'ZF', rada_ddzp: 'DP', rada_opravny: 'OD', rada_nabidka: 'NA', nabidka_platnost_dni: '14', ucetni_email: '',
+        zarucni_podminky: 'Záruka se nevztahuje na vady způsobené mechanickým poškozením, vodou, neodborným zásahem nebo běžným opotřebením. Reklamaci uplatněte v prodejně s tímto listem nebo dokladem o koupi.',
+        servis_podminky: 'Zákazník souhlasí s provedením diagnostiky. Opravu nad odsouhlasenou částku provedeme jen po jeho souhlasu. Za data v zařízení neručíme, doporučujeme zálohu. Zařízení nevyzvednuté do 6 měsíců od výzvy k vyzvednutí můžeme prodat (§ 2428 občanského zákoníku).',
+        servis_lhuta_dni: '30', stitek_format: '50x30',
       },
       uzivatele: [
         { id: 1, jmeno: 'Šéf (demo)', pin: '1234', role: 'SPRAVCE', aktivni: 1, vytvoreno: ted() },
@@ -68,18 +73,21 @@
       ],
       zbozi: [], eany: {}, prodeje: [], polozky: [], prijemky: [], prijemka_polozky: [], pohyby: [], dodavatel_kody: {},
       odberatele: [], faktury: [], faktura_polozky: [], vydejky: [], vydejka_polozky: [],
+      pokladni_doklady: [], pocitani: [], serie: [], servis: [], servis_polozky: [], servis_historie: [],
     };
     db.dalsi.vydejka = 1;
+    Object.assign(db.dalsi, { pokl: 1, poc: 1, serie: 1, servis: 1, spol: 1, shist: 1 });
     db.dalsi.odberatel = 1; db.dalsi.faktura = 1; db.dalsi.fpol = 1;
     for (const [nazev, ean, kat, cena, nakup, stav, jed] of ZBOZI) {
       const id = db.dalsi.zbozi++;
       db.zbozi.push({ id, nazev, kod: null, kategorie: kat, cena: cena * 100, sazba_dph: 21, nakupni_cena: nakup * 100, jednotka: jed,
-        stav: 0, min_stav: jed === 'ks' ? 2 : 20, aktivni: 1, poznamka: null, vytvoreno: ted(), upraveno: ted() });
+        stav: 0, min_stav: jed === 'ks' ? 2 : 20, aktivni: 1, poznamka: null, vytvoreno: ted(), upraveno: ted(), seriova_cisla: kat === 'Telefony' ? 1 : 0, zaruka_mesice: 24 });
       db.eany[ean] = id;
       pohyb(db, id, stav, 'KOREKCE', 'demo', null, 'ukázková data');
     }
     // Dvě ukázkové účtenky, ať účtenky a uzávěrka nejsou prázdné.
     db.relace = 2;
+    vlozPokladniDoklad(db, 'PRIJEM', 'POCATECNI', 200000, 'Počáteční stav', null, 1);
     prodej(db, { platba: 'HOTOVE', prijato: 100000, polozky: [{ zbozi_id: 1, mnozstvi: 2 }, { zbozi_id: 5, mnozstvi: 1 }] });
     prodej(db, { platba: 'KARTA', polozky: [{ zbozi_id: 13, mnozstvi: 1 }] });
     // Ukázkový kontakt a dvě faktury převodem: jedna po splatnosti, jedna uhrazená.
@@ -88,6 +96,13 @@
     const pred = (dni) => { const d = new Date(); d.setDate(d.getDate() - dni); return d.toISOString().slice(0, 10); };
     fakturaPrevodem(db, o, [{ zbozi_id: 9, mnozstvi: 2 }, { zbozi_id: 10, mnozstvi: 2 }], pred(20), null);
     fakturaPrevodem(db, o, [{ zbozi_id: 12, mnozstvi: 3 }], pred(10), pred(3));
+    novaFaktura(db, o, { typ: 'NABIDKA', vystaveni: pred(2), splatnost: plus(pred(2), 14), forma: 'PREVOD', stav: 'NEUHRAZENO',
+      radky: radkyDokladu(db, [{ zbozi_id: 16, mnozstvi: 3 }, { nazev: 'Přenos dat a nastavení telefonu', mnozstvi: 3, cena: 30000, sazba_dph: 21 }], false, false) });
+    // Ukázkové zakázky v servisu: oprava a reklamace.
+    novaZakazka(db, { typ: 'OPRAVA', zakaznik: 'Petr Ukázkový', telefon: '777 000 111', zarizeni: 'iPhone 12 černý', sn: '353000000000001',
+      zavada: 'Prasklý displej, dotyk funguje', vzhled: 'oděrky na rámu', prislusenstvi: 'bez příslušenství', odhad: 290000, max_cena: 350000 }, 1);
+    novaZakazka(db, { typ: 'REKLAMACE', zakaznik: 'Jana Ukázková', telefon: '603 000 222', zarizeni: 'Sluchátka do uší s mikrofonem', zavada: 'Nehraje levé sluchátko',
+      pozadavek: 'výměna za nové', datum_koupe: pred(40), doklad_koupe: 'účtenka 2026-000123' }, 2);
     db.relace = null;
     return db;
   }
@@ -124,10 +139,21 @@
     Object.assign(p, { eet_stav: 'OK', eet_pok: `${uuid()}-ff`, eet_uuid: uuid(), eet_test: 1, eet_pokusy: p.eet_pokusy + 1, eet_posledni_pokus: ted(), eet_chyba: null });
   }
 
+  function plusMesice(iso, m) {
+    const d = new Date(iso.slice(0, 10) + 'T12:00:00'); const den = d.getDate(); d.setDate(1); d.setMonth(d.getMonth() + m);
+    d.setDate(Math.min(den, new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate())); return d.toISOString().slice(0, 10);
+  }
+  function zapisSerie(db, r, serie, zaruka, cas, vazba) {
+    (serie || []).forEach((sn) => db.serie.push({ id: db.dalsi.serie++, sn, zbozi_id: r.zbozi_id, nazev: r.nazev, prodej_id: null, faktura_id: null, ...vazba,
+      cas, zaruka_do: zaruka ? plusMesice(cas, zaruka) : null }));
+  }
+
   function prodejDict(p) {
     const u = DB.uzivatele.find((x) => x.id === p.uzivatel_id);
     const f = (DB.faktury || []).find((x) => x.prodej_id === p.id);
-    return { ...p, prodavac: u ? u.jmeno : null, eet_varovani: [], polozky: DB.polozky.filter((i) => i.prodej_id === p.id), faktura: f ? { id: f.id, cislo: f.cislo } : null };
+    const polozky = DB.polozky.filter((i) => i.prodej_id === p.id).map((i) => ({ ...i, zaruka_mesice: i.zbozi_id ? (zbozi(i.zbozi_id) || {}).zaruka_mesice : null }));
+    const serie = DB.serie.filter((x) => x.prodej_id === (p.storno_k || p.id)).map(({ sn, zbozi_id, nazev, zaruka_do }) => ({ sn, zbozi_id, nazev, zaruka_do }));
+    return { ...p, prodavac: u ? u.jmeno : null, eet_varovani: [], polozky, serie, faktura: f ? { id: f.id, cislo: f.cislo } : null };
   }
 
   function novaUctenka(db, data) {
@@ -149,8 +175,11 @@
         const z = db.zbozi.find((x) => x.id === pol.zbozi_id);
         if (!z) throw new Chyba(400, `Zboží ${pol.zbozi_id} neexistuje`);
         const cena = pol.cena == null ? z.cena : pol.cena;
+        const serie = (pol.serie || []).map((x) => String(x).trim()).filter(Boolean);
+        if (z.seriova_cisla && pol.mnozstvi > 0 && serie.length !== Math.round(pol.mnozstvi)) throw new Chyba(400, `U „${z.nazev}“ načtěte sériové číslo / IMEI každého kusu (${serie.length} z ${pol.mnozstvi})`);
         radky.push({ zbozi_id: z.id, nazev: z.nazev, ean: Object.keys(db.eany).find((e) => db.eany[e] === z.id) || null,
-          mnozstvi: Math.round(pol.mnozstvi * 1000) / 1000, cena, puvodni_cena: cena !== z.cena ? z.cena : null, sazba_dph: z.sazba_dph });
+          mnozstvi: Math.round(pol.mnozstvi * 1000) / 1000, cena, puvodni_cena: cena !== z.cena ? z.cena : null, sazba_dph: z.sazba_dph,
+          _serie: pol.mnozstvi > 0 ? serie : [], _zaruka: z.zaruka_mesice || 0 });
       } else {
         if (!pol.nazev || pol.cena == null) throw new Chyba(400, 'Položka mimo katalog potřebuje název a cenu');
         radky.push({ zbozi_id: null, nazev: pol.nazev.trim(), ean: null, mnozstvi: Math.round(pol.mnozstvi * 1000) / 1000, cena: pol.cena,
@@ -169,9 +198,10 @@
     }
     const p = novaUctenka(db, { platba: data.platba, mezisoucet, zaokrouhleni: celkem - mezisoucet, celkem, prijato, vraceno });
     db.prodeje.push(p);
-    for (const r of radky) {
+    for (const { _serie, _zaruka, ...r } of radky) {
       db.polozky.push({ id: db.dalsi.polozka++, prodej_id: p.id, ...r });
       if (r.zbozi_id != null) pohyb(db, r.zbozi_id, -r.mnozstvi, 'PRODEJ', p.cislo, db.relace);
+      zapisSerie(db, r, _serie, _zaruka, p.cas, { prodej_id: p.id });
     }
     eetOdesli(p);
     return p;
@@ -179,12 +209,15 @@
 
   /* ------------------------------------------------------------------ vydané faktury */
 
-  function radkyDokladu(db, polozky) {
+  function radkyDokladu(db, polozky, pdp = false, seriePovinne = true) {
     return polozky.filter((p) => p.mnozstvi).map((p) => {
       if (p.zbozi_id != null) {
         const z = db.zbozi.find((x) => x.id === p.zbozi_id); if (!z) throw new Chyba(400, `Zboží ${p.zbozi_id} neexistuje`);
-        const cena = p.cena == null ? z.cena : p.cena;
-        return { zbozi_id: z.id, nazev: z.nazev, mnozstvi: p.mnozstvi, jednotka: z.jednotka, cena, sazba_dph: z.sazba_dph, celkem: Math.round(cena * p.mnozstvi) };
+        const katalog = pdp ? Math.round(z.cena / (1 + z.sazba_dph / 100)) : z.cena;
+        const cena = p.cena == null ? katalog : p.cena;
+        const serie = (p.serie || []).filter(Boolean);
+        if (seriePovinne && z.seriova_cisla && p.mnozstvi > 0 && serie.length !== Math.round(p.mnozstvi)) throw new Chyba(400, `U „${z.nazev}“ načtěte sériové číslo / IMEI každého kusu`);
+        return { zbozi_id: z.id, nazev: z.nazev, mnozstvi: p.mnozstvi, jednotka: z.jednotka, cena, sazba_dph: z.sazba_dph, celkem: Math.round(cena * p.mnozstvi), _serie: serie, _zaruka: z.zaruka_mesice || 0 };
       }
       if (!p.nazev || p.cena == null) throw new Chyba(400, 'Položka mimo katalog potřebuje název a cenu');
       return { zbozi_id: null, nazev: p.nazev, mnozstvi: p.mnozstvi, jednotka: 'ks', cena: p.cena, sazba_dph: p.sazba_dph ?? 21, celkem: Math.round(p.cena * p.mnozstvi) };
@@ -192,30 +225,40 @@
   }
   const plus = (iso, n) => { const d = new Date(iso + 'T12:00:00'); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
   const adresa = (o) => [o.ulice, [o.psc, o.mesto].filter(Boolean).join(' ')].filter(Boolean).join(', ') || null;
+  const RADY = { FAKTURA: ['faktura_rada', 'FV'], ZALOHOVA: ['rada_zalohova', 'ZF'], DDZP: ['rada_ddzp', 'DP'], OPRAVNY: ['rada_opravny', 'OD'], NABIDKA: ['rada_nabidka', 'NA'] };
+  const PREDCISLI_VS = { ZALOHOVA: '9', OPRAVNY: '8', NABIDKA: '7', DDZP: '6' };
 
   function novaFaktura(db, o, data) {
+    const typ = data.typ || 'FAKTURA';
     const rok = data.vystaveni.slice(0, 4);
-    const cislo = `${db.nastaveni.faktura_rada || 'FV'}${rok}${String(dalsiCislo(db, 'faktura-' + rok)).padStart(4, '0')}`;
-    const f = { id: db.dalsi.faktura++, cislo, vs: cislo.replace(/\D/g, '').slice(-10), odberatel_id: o.id || null, odb_nazev: o.nazev, odb_ico: o.ico || null, odb_dic: o.dic || null,
-      odb_adresa: adresa(o), odb_email: o.email || null, datum_vystaveni: data.vystaveni, duzp: data.duzp || data.vystaveni,
-      splatnost: data.splatnost || plus(data.vystaveni, +db.nastaveni.faktura_splatnost_dni || 14), forma_uhrady: data.forma, poznamka: data.poznamka || null,
+    const n = dalsiCislo(db, typ === 'FAKTURA' ? 'faktura-' + rok : `doklad-${typ}-${rok}`);
+    const cislo = `${db.nastaveni[RADY[typ][0]] || RADY[typ][1]}${rok}${String(n).padStart(4, '0')}`;
+    const vs = data.vs || (typ === 'FAKTURA' ? cislo.replace(/\D/g, '').slice(-10) : `${PREDCISLI_VS[typ]}${rok.slice(2)}${String(n).padStart(5, '0')}`);
+    const dni = +(typ === 'NABIDKA' ? db.nastaveni.nabidka_platnost_dni : db.nastaveni.faktura_splatnost_dni) || 14;
+    const f = { id: db.dalsi.faktura++, cislo, vs, odberatel_id: o.id || null, odb_nazev: o.nazev, odb_ico: o.ico || null, odb_dic: o.dic || null,
+      odb_adresa: o.odb_adresa || adresa(o), odb_email: o.email || o.odb_email || null, datum_vystaveni: data.vystaveni, duzp: data.duzp || data.vystaveni,
+      splatnost: data.splatnost || plus(data.vystaveni, dni), forma_uhrady: data.forma, poznamka: data.poznamka || null,
       celkem: data.radky.reduce((s, r) => s + r.celkem, 0), stav: data.stav, datum_uhrady: data.uhrazeno || null, prodej_id: data.prodej_id || null,
-      uzivatel_id: db.relace, vytvoreno: ted(), odeslano: null };
+      uzivatel_id: db.relace, vytvoreno: ted(), odeslano: null, typ, vazba_id: data.vazba_id || null, pdp: data.pdp ? 1 : 0, duvod_opravy: data.duvod_opravy || null,
+      upominek: 0, posledni_upominka: null };
     db.faktury.push(f);
-    data.radky.forEach((r) => db.faktura_polozky.push({ id: db.dalsi.fpol++, faktura_id: f.id, ...r }));
+    data.radky.forEach(({ _serie, _zaruka, ...r }) => {
+      db.faktura_polozky.push({ id: db.dalsi.fpol++, faktura_id: f.id, ...r });
+      if (data.serie) zapisSerie(db, r, _serie, _zaruka, ted(), { faktura_id: f.id });
+    });
     return f;
   }
 
   function fakturaPrevodem(db, o, polozky, vystaveni, uhrazeno) {
     const radky = radkyDokladu(db, polozky);
-    const f = novaFaktura(db, o, { vystaveni, forma: 'PREVOD', radky, stav: uhrazeno ? 'UHRAZENO' : 'NEUHRAZENO', uhrazeno });
+    const f = novaFaktura(db, o, { vystaveni, forma: 'PREVOD', radky, stav: uhrazeno ? 'UHRAZENO' : 'NEUHRAZENO', uhrazeno, serie: true });
     radky.forEach((r) => { if (r.zbozi_id != null) pohyb(db, r.zbozi_id, -r.mnozstvi, 'PRODEJ', f.cislo, db.relace, 'faktura'); });
     return f;
   }
 
-  function rekap(polozky) {
+  function rekap(polozky, pdp = false) {
     const m = {}; polozky.forEach((p) => { m[p.sazba_dph] = (m[p.sazba_dph] || 0) + p.celkem; });
-    return Object.keys(m).sort((a, b) => b - a).map((s) => { const c = m[s]; const z = Math.round(c / (1 + s / 100)); return { sazba: +s, zaklad: z, dph: c - z, celkem: c }; });
+    return Object.keys(m).sort((a, b) => b - a).map((s) => { const c = m[s]; const z = pdp ? c : Math.round(c / (1 + s / 100)); return { sazba: +s, zaklad: z, dph: c - z, celkem: c }; });
   }
 
   function ibanZUctu(ucet) {
@@ -225,14 +268,90 @@
     return 'CZ' + String(98 - [...(bban + '123500')].reduce((r, c) => (r * 10 + +c) % 97, 0)).padStart(2, '0') + bban;
   }
 
+  const poSplatnosti = (f) => ['FAKTURA', 'ZALOHOVA'].includes(f.typ) && f.stav === 'NEUHRAZENO' && f.splatnost < ted().slice(0, 10);
   function fakturaDict(f) {
     const polozky = DB.faktura_polozky.filter((p) => p.faktura_id === f.id);
     const p = f.prodej_id ? DB.prodeje.find((x) => x.id === f.prodej_id) : null;
-    const dnes = ted().slice(0, 10);
     const iban = ibanZUctu(DB.nastaveni.faktura_ucet);
-    return { ...f, polozky, dph: rekap(polozky), vystavil: (DB.uzivatele.find((u) => u.id === f.uzivatel_id) || {}).jmeno || null, prodejka: p ? p.cislo : null,
-      po_splatnosti: f.stav === 'NEUHRAZENO' && f.splatnost < dnes, iban, qr: !!(iban && f.forma_uhrady === 'PREVOD' && f.stav === 'NEUHRAZENO') };
+    const v = f.vazba_id ? DB.faktury.find((x) => x.id === f.vazba_id) : null;
+    const navazne = DB.faktury.filter((x) => x.vazba_id === f.id).map(({ id, cislo, typ, datum_vystaveni, celkem, stav }) => ({ id, cislo, typ, datum_vystaveni, celkem, stav }));
+    return { ...f, polozky, dph: rekap(polozky, !!f.pdp), vystavil: (DB.uzivatele.find((u) => u.id === f.uzivatel_id) || {}).jmeno || null, prodejka: p ? p.cislo : null,
+      po_splatnosti: poSplatnosti(f), iban, qr: !!(iban && ['FAKTURA', 'ZALOHOVA'].includes(f.typ) && f.forma_uhrady === 'PREVOD' && f.stav === 'NEUHRAZENO' && f.celkem > 0),
+      vazba: v ? { id: v.id, cislo: v.cislo, typ: v.typ, datum_vystaveni: v.datum_vystaveni, duzp: v.duzp, celkem: v.celkem, stav: v.stav } : null, navazne,
+      k_uhrade: f.celkem + navazne.filter((x) => x.typ === 'OPRAVNY' && x.stav !== 'STORNO').reduce((s, x) => s + x.celkem, 0) };
   }
+
+  function uhrad(f, datum) {
+    Object.assign(f, { stav: 'UHRAZENO', datum_uhrady: datum });
+    if (f.typ !== 'ZALOHOVA' || DB.nastaveni.platce_dph !== '1' || DB.faktury.some((x) => x.vazba_id === f.id && x.typ === 'DDZP')) return;
+    const radky = DB.faktura_polozky.filter((p) => p.faktura_id === f.id).map(({ nazev, mnozstvi, jednotka, cena, sazba_dph, celkem }) => ({ zbozi_id: null, nazev, mnozstvi, jednotka, cena, sazba_dph, celkem }));
+    novaFaktura(DB, { id: f.odberatel_id, nazev: f.odb_nazev, ico: f.odb_ico, dic: f.odb_dic, odb_adresa: f.odb_adresa, odb_email: f.odb_email },
+      { typ: 'DDZP', vystaveni: ted().slice(0, 10), duzp: datum, splatnost: datum, forma: f.forma_uhrady, radky, stav: 'UHRAZENO', uhrazeno: datum, vazba_id: f.id, vs: f.vs });
+  }
+
+  /* ------------------------------------------------------------------ pokladní kniha */
+
+  const DRUHY_POKL = { POCATECNI: ['PRIJEM', 'Počáteční stav'], VKLAD: ['PRIJEM', 'Vklad do pokladny'], VYBER: ['VYDEJ', 'Výběr z pokladny'], ODVOD: ['VYDEJ', 'Odvod tržby'],
+    NAKUP: ['VYDEJ', 'Nákup za hotové'], ROZDIL: [null, 'Rozdíl při počítání'], JINE: [null, 'Jiný pohyb'] };
+  function vlozPokladniDoklad(db, typ, druh, castka, ucel, osoba, uid) {
+    const cas = ted(); const pref = typ === 'PRIJEM' ? 'PP' : 'VP';
+    const d = { id: db.dalsi.pokl++, cislo: `${pref}${cas.slice(0, 4)}-${String(dalsiCislo(db, `pokl-${pref}-${cas.slice(0, 4)}`)).padStart(5, '0')}`, cas, typ, druh, castka,
+      ucel: ucel || DRUHY_POKL[druh][1], osoba: osoba || null, uzivatel_id: uid, stornovano: 0 };
+    db.pokladni_doklady.push(d); return d;
+  }
+  function stavPokladny(pred) {
+    const trzby = DB.prodeje.filter((p) => p.platba === 'HOTOVE' && (!pred || p.cas < pred)).reduce((s, p) => s + p.celkem, 0);
+    return trzby + DB.pokladni_doklady.filter((d) => !d.stornovano && (!pred || d.cas < pred)).reduce((s, d) => s + (d.typ === 'PRIJEM' ? d.castka : -d.castka), 0);
+  }
+  const pocitaniDict = (c) => ({ ...c, rozdil: c.spocitano - c.ocekavano, uzivatel: (DB.uzivatele.find((u) => u.id === c.uzivatel_id) || {}).jmeno || null });
+  function denPokladny(datum) {
+    const zitra = plus(datum, 1);
+    const dok = DB.pokladni_doklady.filter((d) => !d.stornovano && d.cas.startsWith(datum));
+    const poc = DB.pocitani.filter((c) => c.cas.startsWith(datum)).pop();
+    return { datum, rano: stavPokladny(datum), trzby: DB.prodeje.filter((p) => p.platba === 'HOTOVE' && p.cas.startsWith(datum)).reduce((s, p) => s + p.celkem, 0),
+      prijmy: dok.filter((d) => d.typ === 'PRIJEM').reduce((s, d) => s + d.castka, 0), vydaje: dok.filter((d) => d.typ === 'VYDEJ').reduce((s, d) => s + d.castka, 0),
+      vecer: stavPokladny(zitra), pocitani: poc ? pocitaniDict(poc) : null };
+  }
+  const pokladniDict = (d) => ({ ...d, druh_text: (DRUHY_POKL[d.druh] || [null, d.druh])[1], uzivatel: (DB.uzivatele.find((u) => u.id === d.uzivatel_id) || {}).jmeno || null });
+
+  /* ------------------------------------------------------------------ servis */
+
+  const STAVY_SV = { PRIJATO: 'Přijato', DIAGNOSTIKA: 'Diagnostika', CEKA_ZAKAZNIK: 'Čeká na souhlas zákazníka', CEKA_DIL: 'Čeká na díl', V_OPRAVE: 'V opravě',
+    U_DODAVATELE: 'U dodavatele / výrobce', HOTOVO: 'Připraveno k vyzvednutí', VYDANO: 'Vydáno', ZRUSENO: 'Zrušeno' };
+  const AKTIVNI_SV = ['PRIJATO', 'DIAGNOSTIKA', 'CEKA_ZAKAZNIK', 'CEKA_DIL', 'V_OPRAVE', 'U_DODAVATELE', 'HOTOVO'];
+  const VYRIZENI_SV = { OPRAVA: 'Uznána – opraveno', VYMENA: 'Uznána – vyměněno za nové', SLEVA: 'Uznána – přiměřená sleva', VRACENI_PENEZ: 'Uznána – vráceny peníze',
+    ZAMITNUTO: 'Zamítnuta', OPRAVENO: 'Opraveno', NEOPRAVITELNE: 'Nelze opravit', ODMITNUTO: 'Zákazník opravu odmítl' };
+  const POLE_SV = ['zakaznik', 'telefon', 'email', 'zarizeni', 'sn', 'prislusenstvi', 'vzhled', 'heslo', 'zavada', 'pozadavek', 'odhad', 'max_cena', 'termin', 'prodej_id',
+    'doklad_koupe', 'datum_koupe', 'technik_id', 'dodavatel', 'dodavatel_rma', 'vyjadreni', 'poznamka', 'odberatel_id'];
+  const dniDo = (iso) => Math.round((new Date(iso.slice(0, 10) + 'T12:00:00') - new Date(ted().slice(0, 10) + 'T12:00:00')) / 864e5);
+  function historie(db, zid, uid, stav, text) { db.servis_historie.push({ id: db.dalsi.shist++, zakazka_id: zid, cas: ted(), uzivatel_id: uid, stav, text }); const z = db.servis.find((x) => x.id === zid); if (z) z.upraveno = ted(); }
+  function novaZakazka(db, b, uid) {
+    const cas = ted(); const rekl = b.typ === 'REKLAMACE';
+    const z = { id: db.dalsi.servis++, cislo: `${rekl ? 'R' : 'S'}${cas.slice(0, 4)}-${String(dalsiCislo(db, `servis-${b.typ}-${cas.slice(0, 4)}`)).padStart(5, '0')}`, typ: b.typ, stav: 'PRIJATO',
+      prijato: cas, lhuta: rekl ? plus(cas.slice(0, 10), +db.nastaveni.servis_lhuta_dni || 30) : null, uzivatel_id: uid, upraveno: cas, zaloha: 0, odeslano_dodavateli: null,
+      vraceno_od_dodavatele: null, vyrizeni: null, vyrizeno: null, vydano: null, vydal_id: null, prodej_vydani_id: null, faktura_id: null, vydejka_id: null };
+    POLE_SV.forEach((k) => { const v = b[k]; z[k] = typeof v === 'string' ? (v.trim() || null) : (v ?? null); });
+    db.servis.push(z);
+    historie(db, z.id, uid, 'PRIJATO', rekl ? 'Reklamace uplatněna' : 'Zakázka přijata');
+    return z;
+  }
+  function zakazkaDict(z) {
+    const jm = (id) => (DB.uzivatele.find((u) => u.id === id) || {}).jmeno || null;
+    const polozky = DB.servis_polozky.filter((p) => p.zakazka_id === z.id).map((p) => ({ ...p, celkem: Math.round(p.cena * p.mnozstvi) }));
+    const celkem = polozky.reduce((s, p) => s + p.celkem, 0);
+    const pk = z.prodej_id ? DB.prodeje.find((p) => p.id === z.prodej_id) : null;
+    const pv = z.prodej_vydani_id ? DB.prodeje.find((p) => p.id === z.prodej_vydani_id) : null;
+    const d = { ...z, prijal: jm(z.uzivatel_id), technik: jm(z.technik_id), vydal: jm(z.vydal_id), prodejka_koupe: pk ? pk.cislo : null, cas_koupe: pk ? pk.cas : null,
+      prodejka_vydani: pv ? pv.cislo : null, faktura: z.faktura_id ? (DB.faktury.find((f) => f.id === z.faktura_id) || {}).cislo : null,
+      vydejka: z.vydejka_id ? (DB.vydejky.find((v) => v.id === z.vydejka_id) || {}).cislo : null,
+      polozky, celkem, doplatit: celkem - (z.zaloha || 0), stav_text: STAVY_SV[z.stav], vyrizeni_text: VYRIZENI_SV[z.vyrizeni] || '',
+      historie: DB.servis_historie.filter((h) => h.zakazka_id === z.id).slice().reverse().map((h) => ({ ...h, uzivatel: jm(h.uzivatel_id) })),
+      dni_do_lhuty: z.lhuta ? dniDo(z.lhuta) : null };
+    if (z.typ === 'REKLAMACE') d.doba_vyrizeni_dni = Math.round((new Date((z.vyrizeno || z.vydano || ted()).slice(0, 10)) - new Date(z.prijato.slice(0, 10))) / 864e5);
+    return d;
+  }
+  const zakazka = (id) => { const z = DB.servis.find((x) => x.id === +id); if (!z) throw new Chyba(404, 'Zakázka nenalezena'); return z; };
+  const otevrena = (z) => { if (['VYDANO', 'ZRUSENO'].includes(z.stav)) throw new Chyba(409, 'Zakázka je uzavřená'); };
 
   function ulozOdberatele(o) {
     const pole = ['nazev', 'ico', 'dic', 'ulice', 'mesto', 'psc', 'email', 'telefon', 'poznamka'];
@@ -316,7 +435,7 @@
 
   const TAJNE = ['eet_cert_heslo', 'ai_api_klic', 'zaloha_heslo'];
   const nastaveniVen = () => { const n = { ...DB.nastaveni }; TAJNE.forEach((k) => { n[k] = n[k] ? '********' : ''; }); return n; };
-  const ZBOZI_POLE = ['nazev', 'kod', 'kategorie', 'cena', 'sazba_dph', 'nakupni_cena', 'jednotka', 'min_stav', 'poznamka'];
+  const ZBOZI_POLE = ['nazev', 'kod', 'kategorie', 'cena', 'sazba_dph', 'nakupni_cena', 'jednotka', 'min_stav', 'poznamka', 'zaruka_mesice'];
 
   function ulozEany(zid, eany) {
     const ciste = [...new Set((eany || []).map((e) => String(e).trim()).filter(Boolean))];
@@ -332,7 +451,7 @@
       const u = ja(); const n = DB.nastaveni;
       return { potreba_nastaveni: false, uzivatel: u ? { id: u.id, jmeno: u.jmeno, role: u.role } : null, eet_rezim: n.eet_rezim,
         firma: Object.fromEntries(['firma_nazev', 'firma_ico', 'firma_dic', 'firma_adresa', 'provozovna', 'telefon', 'platce_dph', 'zaokrouhlovat_hotovost', 'uctenka_paticka',
-          'faktura_ucet', 'faktura_pata', 'faktura_splatnost_dni'].map((k) => [k, n[k]])) };
+          'faktura_ucet', 'faktura_pata', 'faktura_splatnost_dni', 'servis_podminky', 'zarucni_podminky', 'servis_lhuta_dni', 'stitek_format'].map((k) => [k, n[k]])) };
     }],
     ['POST', /^\/api\/prihlaseni$/, (m, q, b) => {
       const u = DB.uzivatele.find((x) => x.aktivni && x.pin === String(b.pin));
@@ -373,6 +492,7 @@
       const z = { id, stav: 0, aktivni: b.aktivni === false ? 0 : 1, vytvoreno: ted(), upraveno: ted() };
       ZBOZI_POLE.forEach((k) => { z[k] = b[k] === undefined ? null : b[k]; });
       z.nazev = String(b.nazev || '').trim(); z.sazba_dph = b.sazba_dph ?? 21; z.jednotka = b.jednotka || 'ks'; z.min_stav = b.min_stav || 0; z.cena = b.cena || 0;
+      z.seriova_cisla = b.seriova_cisla ? 1 : 0; z.zaruka_mesice = b.zaruka_mesice ?? 24;
       if (!z.nazev) throw new Chyba(422, 'Vyplňte název');
       DB.zbozi.push(z);
       if (b.pocatecni_stav) pohyb(DB, id, b.pocatecni_stav, 'KOREKCE', 'založení', u.id, 'počáteční stav');
@@ -383,7 +503,7 @@
       if (b.kod && DB.zbozi.some((x) => x.kod === b.kod && x.id !== z.id)) throw new Chyba(409, `Kód ${b.kod} už existuje`);
       ulozEany(z.id, b.eany);
       ZBOZI_POLE.forEach((k) => { if (b[k] !== undefined) z[k] = b[k]; });
-      z.aktivni = b.aktivni === false ? 0 : 1; z.upraveno = ted();
+      z.aktivni = b.aktivni === false ? 0 : 1; z.seriova_cisla = b.seriova_cisla ? 1 : 0; z.upraveno = ted();
       return zboziDict(z);
     }],
 
@@ -518,7 +638,7 @@
       const prod = {};
       den.forEach((p) => { const j = (DB.uzivatele.find((u) => u.id === p.uzivatel_id) || {}).jmeno; prod[j] = prod[j] || { jmeno: j, pocet: 0, celkem: 0 }; prod[j].pocet++; prod[j].celkem += p.celkem; });
       return { datum, platby: skup('platba'), typy: skup('typ'), dph, zaokrouhleni: den.reduce((s, p) => s + p.zaokrouhleni, 0), eet,
-        prodavaci: Object.values(prod), celkem: den.reduce((s, p) => s + p.celkem, 0) };
+        prodavaci: Object.values(prod), celkem: den.reduce((s, p) => s + p.celkem, 0), hotovost: denPokladny(datum) };
     }],
 
     ['GET', /^\/api\/nastaveni$/, () => { spravce(); return nastaveniVen(); }],
@@ -551,8 +671,8 @@
     ['GET', /^\/api\/odberatele$/, (m, q) => {
       prihlasen(); const t = norm((q.get('q') || '').trim());
       return DB.odberatele.filter((o) => !t || norm(o.nazev).includes(t) || (o.ico || '').startsWith(t) || norm(o.mesto).includes(t))
-        .map((o) => ({ ...o, faktur: DB.faktury.filter((f) => f.odberatel_id === o.id && f.stav !== 'STORNO').length,
-          dluzi: DB.faktury.filter((f) => f.odberatel_id === o.id && f.stav === 'NEUHRAZENO').reduce((s, f) => s + f.celkem, 0) }))
+        .map((o) => ({ ...o, faktur: DB.faktury.filter((f) => f.odberatel_id === o.id && f.stav !== 'STORNO' && f.typ === 'FAKTURA').length,
+          dluzi: DB.faktury.filter((f) => f.odberatel_id === o.id && f.stav === 'NEUHRAZENO' && ['FAKTURA', 'ZALOHOVA'].includes(f.typ)).reduce((s, f) => s + f.celkem, 0) }))
         .sort((a, b) => a.nazev.localeCompare(b.nazev, 'cs'));
     }],
     ['POST', /^\/api\/odberatele$/, (m, q, b) => { prihlasen(); if (!b.nazev) throw new Chyba(422, 'Vyplňte název'); return ulozOdberatele(b); }],
@@ -569,22 +689,33 @@
     }],
     ['GET', /^\/api\/faktury-vydane$/, (m, q) => {
       prihlasen(); const dnes = ted().slice(0, 10); const filtr = q.get('filtr') || 'vse'; const t = norm((q.get('q') || '').trim());
-      let r = DB.faktury.slice().reverse();
+      const typy = { FAKTURA: ['FAKTURA'], ZALOHOVA: ['ZALOHOVA', 'DDZP'], OPRAVNY: ['OPRAVNY'], NABIDKA: ['NABIDKA'], vse: Object.keys(RADY) }[q.get('typ') || 'FAKTURA'] || ['FAKTURA'];
+      const vse = DB.faktury.filter((f) => typy.includes(f.typ));
+      let r = vse.slice().reverse();
       if (filtr === 'neuhrazene') r = r.filter((f) => f.stav === 'NEUHRAZENO');
       if (filtr === 'po_splatnosti') r = r.filter((f) => f.stav === 'NEUHRAZENO' && f.splatnost < dnes);
       if (filtr === 'uhrazene') r = r.filter((f) => f.stav === 'UHRAZENO');
       if (t) r = r.filter((f) => f.cislo.toLowerCase().includes(t) || norm(f.odb_nazev).includes(t) || (f.odb_ico || '').startsWith(t));
-      const nu = DB.faktury.filter((f) => f.stav === 'NEUHRAZENO'); const ps = nu.filter((f) => f.splatnost < dnes);
-      return { faktury: r.map((f) => ({ ...f, po_splatnosti: f.stav === 'NEUHRAZENO' && f.splatnost < dnes })),
+      const nu = vse.filter((f) => f.stav === 'NEUHRAZENO'); const ps = nu.filter((f) => f.splatnost < dnes);
+      return { faktury: r.map((f) => ({ ...f, po_splatnosti: poSplatnosti(f) })),
         souhrn: { neuhrazeno: nu.reduce((s, f) => s + f.celkem, 0), po_splatnosti: ps.reduce((s, f) => s + f.celkem, 0), pocet_po_splatnosti: ps.length,
-          mesic: DB.faktury.filter((f) => f.stav !== 'STORNO' && f.datum_vystaveni.startsWith(dnes.slice(0, 7))).reduce((s, f) => s + f.celkem, 0) } };
+          k_upominani: ps.filter((f) => f.odb_email).length,
+          mesic: vse.filter((f) => f.stav !== 'STORNO' && f.typ !== 'DDZP' && f.datum_vystaveni.startsWith(dnes.slice(0, 7))).reduce((s, f) => s + f.celkem, 0) } };
     }],
-    ['GET', /^\/api\/faktury-vydane\/(\d+)$/, (m) => { prihlasen(); const f = DB.faktury.find((x) => x.id === +m[1]); if (!f) throw new Chyba(404, 'Faktura nenalezena'); return fakturaDict(f); }],
+    ['GET', /^\/api\/faktury-vydane\/(\d+)$/, (m) => { prihlasen(); const f = DB.faktury.find((x) => x.id === +m[1]); if (!f) throw new Chyba(404, 'Doklad nenalezen'); return fakturaDict(f); }],
     ['POST', /^\/api\/faktury-vydane$/, (m, q, b) => {
-      const u = prihlasen(); const dnes = ted().slice(0, 10);
+      const u = prihlasen(); const dnes = ted().slice(0, 10); const typ = b.typ || 'FAKTURA'; const forma = b.forma_uhrady; const platce = DB.nastaveni.platce_dph === '1';
       const o = { ...b.odberatel }; if (!o.nazev) throw new Chyba(422, 'Vyplňte odběratele');
+      if (b.pdp && (!platce || typ === 'ZALOHOVA' || !['PREVOD', 'DOBIRKA'].includes(forma) || b.prodej_id)) throw new Chyba(400, 'Přenesení daňové povinnosti jde jen u dokladu plátce DPH placeného převodem nebo dobírkou');
+      if (b.pdp && !o.dic) throw new Chyba(400, 'Při přenesení daňové povinnosti musí mít odběratel DIČ');
+      if (typ === 'ZALOHOVA' && forma !== 'PREVOD') throw new Chyba(400, 'Zálohová faktura se platí převodem');
+      const vazba = b.vazba_id ? DB.faktury.find((x) => x.id === b.vazba_id) : null;
+      if (typ === 'OPRAVNY') {
+        if (!vazba || vazba.typ !== 'FAKTURA' || vazba.stav === 'STORNO' || vazba.prodej_id) throw new Chyba(400, 'Opravný doklad jde vystavit jen k faktuře placené převodem nebo dobírkou');
+        if (!(b.duvod_opravy || '').trim()) throw new Chyba(400, 'Uveďte důvod opravy');
+      }
       const ulozeny = b.ulozit_kontakt === false ? o : ulozOdberatele(o);
-      const zaklad = { vystaveni: b.datum_vystaveni || dnes, duzp: b.duzp, splatnost: b.splatnost, poznamka: b.poznamka };
+      const zaklad = { typ, vystaveni: b.datum_vystaveni || dnes, duzp: b.duzp, splatnost: b.splatnost, poznamka: b.poznamka, vazba_id: vazba ? vazba.id : null, pdp: !!b.pdp, duvod_opravy: b.duvod_opravy };
       let f;
       if (b.prodej_id) {
         const p = DB.prodeje.find((x) => x.id === b.prodej_id);
@@ -593,32 +724,225 @@
         const radky = DB.polozky.filter((i) => i.prodej_id === p.id).map(({ zbozi_id, nazev, mnozstvi, cena, sazba_dph, celkem }) => ({ zbozi_id, nazev, mnozstvi, jednotka: null, cena, sazba_dph, celkem }));
         if (p.zaokrouhleni) radky.push({ zbozi_id: null, nazev: 'Zaokrouhlení', mnozstvi: 1, jednotka: null, cena: p.zaokrouhleni, sazba_dph: 0, celkem: p.zaokrouhleni });
         f = novaFaktura(DB, { ...ulozeny, id: ulozeny.id }, { ...zaklad, duzp: p.cas.slice(0, 10), forma: p.platba, radky, stav: 'UHRAZENO', uhrazeno: p.cas.slice(0, 10), prodej_id: p.id });
-      } else if (b.forma_uhrady === 'HOTOVE' || b.forma_uhrady === 'KARTA') {
-        const p = prodej(DB, { platba: b.forma_uhrady, prijato: b.prijato, polozky: b.polozky });
-        const radky = DB.polozky.filter((i) => i.prodej_id === p.id).map(({ zbozi_id, nazev, mnozstvi, cena, sazba_dph, celkem }) => ({ zbozi_id, nazev, mnozstvi, jednotka: null, cena, sazba_dph, celkem }));
-        if (p.zaokrouhleni) radky.push({ zbozi_id: null, nazev: 'Zaokrouhlení', mnozstvi: 1, jednotka: null, cena: p.zaokrouhleni, sazba_dph: 0, celkem: p.zaokrouhleni });
-        f = novaFaktura(DB, ulozeny, { ...zaklad, forma: b.forma_uhrady, radky, stav: 'UHRAZENO', uhrazeno: dnes, prodej_id: p.id });
       } else {
-        const radky = radkyDokladu(DB, b.polozky || []);
-        if (!radky.length) throw new Chyba(400, 'Faktura nemá žádnou položku');
-        f = novaFaktura(DB, ulozeny, { ...zaklad, forma: b.forma_uhrady, radky, stav: 'NEUHRAZENO' });
-        radky.forEach((r) => { if (r.zbozi_id != null) pohyb(DB, r.zbozi_id, -r.mnozstvi, 'PRODEJ', f.cislo, u.id, 'faktura'); });
+        const radky = radkyDokladu(DB, b.polozky || [], !!b.pdp, typ === 'FAKTURA');
+        if (!radky.length) throw new Chyba(400, 'Doklad nemá žádnou položku');
+        if (typ === 'FAKTURA' && vazba && vazba.typ === 'ZALOHOVA') {
+          if (vazba.stav !== 'UHRAZENO') throw new Chyba(400, `Zálohová faktura ${vazba.cislo} ještě není zaplacená`);
+          if (DB.faktury.some((x) => x.vazba_id === vazba.id && x.typ === 'FAKTURA' && x.stav !== 'STORNO')) throw new Chyba(409, `Záloha ${vazba.cislo} už je vyúčtovaná`);
+          const zdroj = DB.faktury.find((x) => x.vazba_id === vazba.id && x.typ === 'DDZP') || vazba;
+          rekap(DB.faktura_polozky.filter((x) => x.faktura_id === zdroj.id)).forEach((r) => radky.push({ zbozi_id: null, nazev: `Odpočet zálohy ${zdroj.cislo}`, mnozstvi: 1, jednotka: null, cena: -r.celkem, sazba_dph: r.sazba, celkem: -r.celkem }));
+        }
+        if (typ === 'OPRAVNY' && radky.reduce((s, r) => s + r.celkem, 0) >= 0) throw new Chyba(400, 'Opravný doklad musí částku snižovat: zadejte vrácené množství nebo slevu se záporným znaménkem');
+        if (typ === 'FAKTURA' && (forma === 'HOTOVE' || forma === 'KARTA')) {
+          const p = prodej(DB, { platba: forma, prijato: b.prijato, polozky: b.polozky });
+          const rp = DB.polozky.filter((i) => i.prodej_id === p.id).map(({ zbozi_id, nazev, mnozstvi, cena, sazba_dph, celkem }) => ({ zbozi_id, nazev, mnozstvi, jednotka: null, cena, sazba_dph, celkem }));
+          if (p.zaokrouhleni) rp.push({ zbozi_id: null, nazev: 'Zaokrouhlení', mnozstvi: 1, jednotka: null, cena: p.zaokrouhleni, sazba_dph: 0, celkem: p.zaokrouhleni });
+          f = novaFaktura(DB, ulozeny, { ...zaklad, forma, radky: rp, stav: 'UHRAZENO', uhrazeno: dnes, prodej_id: p.id });
+        } else {
+          const celkem = radky.reduce((s, r) => s + r.celkem, 0);
+          const uhrazeno = typ === 'FAKTURA' && celkem <= 0;
+          f = novaFaktura(DB, ulozeny, { ...zaklad, forma, radky, stav: uhrazeno ? 'UHRAZENO' : 'NEUHRAZENO', uhrazeno: uhrazeno ? zaklad.vystaveni : null, serie: typ === 'FAKTURA' });
+          radky.forEach((r) => {
+            if (r.zbozi_id == null) return;
+            if (typ === 'FAKTURA') pohyb(DB, r.zbozi_id, -r.mnozstvi, 'PRODEJ', f.cislo, u.id, 'faktura');
+            else if (typ === 'OPRAVNY' && b.vratit_na_sklad !== false && r.mnozstvi < 0) pohyb(DB, r.zbozi_id, -r.mnozstvi, 'PRODEJ', f.cislo, u.id, 'opravný doklad – vráceno');
+          });
+        }
       }
+      if (vazba && vazba.typ === 'NABIDKA' && ['FAKTURA', 'ZALOHOVA'].includes(typ) && vazba.stav === 'NEUHRAZENO') Object.assign(vazba, { stav: 'UHRAZENO', datum_uhrady: dnes });
       return fakturaDict(f);
     }],
     ['POST', /^\/api\/faktury-vydane\/(\d+)\/uhrada$/, (m, q, b) => {
-      prihlasen(); const f = DB.faktury.find((x) => x.id === +m[1]); if (!f) throw new Chyba(404, 'Faktura nenalezena');
-      if (f.stav === 'STORNO' || f.prodej_id) throw new Chyba(409, 'U této faktury nejde úhradu měnit');
-      if (b.uhrazeno === false) Object.assign(f, { stav: 'NEUHRAZENO', datum_uhrady: null }); else Object.assign(f, { stav: 'UHRAZENO', datum_uhrady: b.datum || ted().slice(0, 10) });
+      prihlasen(); const f = DB.faktury.find((x) => x.id === +m[1]); if (!f) throw new Chyba(404, 'Doklad nenalezen');
+      if (f.stav === 'STORNO' || f.prodej_id || ['DDZP', 'NABIDKA'].includes(f.typ)) throw new Chyba(409, 'U tohoto dokladu nejde úhradu měnit');
+      if (b.uhrazeno === false) {
+        if (DB.faktury.some((x) => x.vazba_id === f.id && x.typ === 'DDZP')) throw new Chyba(409, 'K záloze už je vystavený daňový doklad k platbě, úhradu nejde vrátit');
+        Object.assign(f, { stav: 'NEUHRAZENO', datum_uhrady: null });
+      } else uhrad(f, b.datum || ted().slice(0, 10));
       return fakturaDict(f);
     }],
     ['POST', /^\/api\/faktury-vydane\/(\d+)\/storno$/, (m) => {
-      const u = prihlasen(); const f = DB.faktury.find((x) => x.id === +m[1]); if (!f) throw new Chyba(404, 'Faktura nenalezena');
-      if (f.stav !== 'NEUHRAZENO' || f.prodej_id) throw new Chyba(409, 'Stornovat jde jen neuhrazenou fakturu převodem. Zaplacenou vraťte stornem prodejky.');
-      DB.faktura_polozky.filter((p) => p.faktura_id === f.id && p.zbozi_id != null).forEach((p) => pohyb(DB, p.zbozi_id, p.mnozstvi, 'STORNO', f.cislo, u.id, 'storno faktury'));
+      const u = prihlasen(); const f = DB.faktury.find((x) => x.id === +m[1]); if (!f) throw new Chyba(404, 'Doklad nenalezen');
+      if (f.typ === 'DDZP') throw new Chyba(409, 'Daňový doklad k přijaté platbě nejde stornovat');
+      if (f.stav !== 'NEUHRAZENO' || f.prodej_id) throw new Chyba(409, 'Stornovat jde jen neuhrazený doklad placený převodem. Zaplacený nákup vraťte stornem prodejky.');
+      const aktivni = DB.faktury.filter((x) => x.vazba_id === f.id && x.stav !== 'STORNO').map((x) => x.cislo);
+      if (aktivni.length) throw new Chyba(409, `Na doklad navazuje ${aktivni.join(', ')} – nejdřív stornujte ten`);
+      DB.pohyby.filter((p) => p.doklad === f.cislo && p.typ === 'PRODEJ').forEach((p) => pohyb(DB, p.zbozi_id, -p.mnozstvi, 'STORNO', f.cislo, u.id, 'storno dokladu'));
       f.stav = 'STORNO'; return fakturaDict(f);
     }],
     ['POST', /^\/api\/faktury-vydane\/(\d+)\/odeslat$/, () => { throw new Chyba(400, 'V demu se e-maily neodesílají.'); }],
+    ['POST', /^\/api\/faktury-vydane\/(\d+)\/upominka$/, () => { throw new Chyba(400, 'V demu se e-maily neodesílají.'); }],
+    ['POST', /^\/api\/faktury-vydane\/upominky$/, () => { throw new Chyba(400, 'V demu se e-maily neodesílají.'); }],
+    ['POST', /^\/api\/banka\/import$/, () => { prihlasen(); throw new Chyba(400, 'V demu se bankovní výpisy nenačítají. Ve skutečné pokladně nahrajete výpis (GPC, XML camt.053 nebo CSV) a platby se spárují s fakturami samy.'); }],
+    ['GET', /^\/api\/banka\/pohyby$/, () => { prihlasen(); return []; }],
+
+    ['GET', /^\/api\/pokladna\/stav$/, () => {
+      prihlasen(); const posl = DB.pocitani[DB.pocitani.length - 1];
+      return { stav: stavPokladny(), dnes: denPokladny(ted().slice(0, 10)), posledni_pocitani: posl ? pocitaniDict(posl) : null, nominaly: [5000, 2000, 1000, 500, 200, 100, 50, 20, 10, 5, 2, 1] };
+    }],
+    ['POST', /^\/api\/pokladna\/doklady$/, (m, q, b) => {
+      const u = prihlasen();
+      if (!DRUHY_POKL[b.druh] || b.druh === 'ROZDIL') throw new Chyba(400, 'Neznámý druh pokladního dokladu');
+      const typ = DRUHY_POKL[b.druh][0] || b.typ;
+      if (b.druh === 'POCATECNI' && u.role !== 'SPRAVCE') throw new Chyba(403, 'Počáteční stav zadává správce');
+      if (!(b.castka > 0)) throw new Chyba(422, 'Zadejte částku');
+      if (typ === 'VYDEJ' && b.castka > stavPokladny()) throw new Chyba(400, `V pokladně je podle evidence jen ${(stavPokladny() / 100).toLocaleString('cs-CZ', { minimumFractionDigits: 2 })} Kč`);
+      return pokladniDict(vlozPokladniDoklad(DB, typ, b.druh, b.castka, (b.ucel || '').trim(), (b.osoba || '').trim(), u.id));
+    }],
+    ['GET', /^\/api\/pokladna\/doklady\/(\d+)$/, (m) => { prihlasen(); const d = DB.pokladni_doklady.find((x) => x.id === +m[1]); if (!d) throw new Chyba(404, 'Pokladní doklad nenalezen'); return pokladniDict(d); }],
+    ['POST', /^\/api\/pokladna\/doklady\/(\d+)\/storno$/, (m) => {
+      spravce(); const d = DB.pokladni_doklady.find((x) => x.id === +m[1]); if (!d) throw new Chyba(404, 'Pokladní doklad nenalezen');
+      if (d.stornovano) throw new Chyba(409, 'Doklad už je stornovaný'); d.stornovano = 1; return pokladniDict(d);
+    }],
+    ['GET', /^\/api\/pokladna\/kniha$/, (m, q) => {
+      prihlasen(); const mesic = (q.get('mesic') || ted().slice(0, 7)).slice(0, 7); const pocatek = stavPokladny(`${mesic}-01`);
+      const radky = DB.pokladni_doklady.filter((d) => d.cas.startsWith(mesic)).map((d) => ({ druh: d.druh, id: d.id, cas: d.cas, datum: d.cas.slice(0, 10), cislo: d.cislo,
+        text: d.ucel || DRUHY_POKL[d.druh][1], osoba: d.osoba, uzivatel: pokladniDict(d).uzivatel, stornovano: d.stornovano,
+        prijem: d.typ === 'PRIJEM' ? d.castka : 0, vydej: d.typ === 'VYDEJ' ? d.castka : 0 }));
+      const hranice = radky.map((r) => r.cas).sort(); const useky = new Map();
+      DB.prodeje.filter((p) => p.platba === 'HOTOVE' && p.cas.startsWith(mesic)).sort((a, b) => (a.cas < b.cas ? -1 : 1)).forEach((p) => {
+        const k = p.cas.slice(0, 10) + '|' + (hranice.find((h) => h > p.cas && h.slice(0, 10) === p.cas.slice(0, 10)) || '');
+        const u = useky.get(k) || { pocet: 0, celkem: 0, cas: p.cas }; u.pocet++; u.celkem += p.celkem; u.cas = p.cas; useky.set(k, u);
+      });
+      for (const [k, u] of useky) if (u.celkem) radky.push({ druh: 'TRZBY', cas: u.cas, datum: k.slice(0, 10), cislo: null, text: `Tržby hotově (${u.pocet} ${u.pocet === 1 ? 'prodejka' : u.pocet < 5 ? 'prodejky' : 'prodejek'})`, prijem: Math.max(u.celkem, 0), vydej: Math.max(-u.celkem, 0) });
+      radky.sort((a, b) => (a.cas < b.cas ? -1 : 1));
+      let zustatek = pocatek; radky.forEach((r) => { if (!r.stornovano) zustatek += r.prijem - r.vydej; r.zustatek = zustatek; });
+      return { mesic, pocatek, konec: zustatek, radky, pocitani: DB.pocitani.filter((c) => c.cas.startsWith(mesic)).map(pocitaniDict),
+        prijmy: radky.filter((r) => !r.stornovano).reduce((s, r) => s + r.prijem, 0), vydaje: radky.filter((r) => !r.stornovano).reduce((s, r) => s + r.vydej, 0) };
+    }],
+    ['POST', /^\/api\/pokladna\/pocitani$/, (m, q, b) => {
+      const u = prihlasen(); const rozpis = {};
+      Object.entries(b.rozpis || {}).forEach(([k, v]) => { if (+v > 0) rozpis[k] = +v; });
+      const spocitano = Object.entries(rozpis).reduce((s, [k, v]) => s + k * 100 * v, 0); const ocekavano = stavPokladny(); const rozdil = spocitano - ocekavano;
+      let did = null;
+      if (b.zauctovat !== false && rozdil) did = vlozPokladniDoklad(DB, rozdil > 0 ? 'PRIJEM' : 'VYDEJ', 'ROZDIL', Math.abs(rozdil), rozdil > 0 ? 'Přebytek při počítání pokladny' : 'Manko při počítání pokladny', null, u.id).id;
+      const c = { id: DB.dalsi.poc++, cas: ted(), ocekavano, spocitano, rozpis, doklad_id: did, uzivatel_id: u.id, poznamka: b.poznamka || null };
+      DB.pocitani.push(c); return pocitaniDict(c);
+    }],
+
+    ['GET', /^\/api\/servis$/, (m, q) => {
+      prihlasen(); const filtr = q.get('filtr') || 'aktivni'; const t = norm((q.get('q') || '').trim()); const tyden = plus(ted().slice(0, 10), 7);
+      const hori = (z) => z.typ === 'REKLAMACE' && !z.vyrizeno && !['VYDANO', 'ZRUSENO'].includes(z.stav) && z.lhuta <= tyden;
+      let r = DB.servis.slice();
+      if (filtr === 'aktivni') r = r.filter((z) => AKTIVNI_SV.includes(z.stav));
+      if (filtr === 'reklamace' || filtr === 'opravy') r = r.filter((z) => z.typ === (filtr === 'reklamace' ? 'REKLAMACE' : 'OPRAVA') && AKTIVNI_SV.includes(z.stav));
+      if (filtr === 'u_dodavatele') r = r.filter((z) => z.stav === 'U_DODAVATELE');
+      if (filtr === 'hotove') r = r.filter((z) => z.stav === 'HOTOVO');
+      if (filtr === 'lhuta') r = r.filter(hori);
+      if (filtr === 'vydane') r = r.filter((z) => ['VYDANO', 'ZRUSENO'].includes(z.stav));
+      if (t) r = r.filter((z) => z.cislo.toLowerCase().includes(t) || norm(z.zakaznik).includes(t) || (z.telefon || '').replace(/\s/g, '').includes(t.replace(/\s/g, '')) || (z.sn || '').includes(t) || norm(z.zarizeni).includes(t) || (z.dodavatel_rma || '').toLowerCase().includes(t));
+      const pocty = {}; DB.servis.filter((z) => AKTIVNI_SV.includes(z.stav)).forEach((z) => { pocty[z.stav] = (pocty[z.stav] || 0) + 1; });
+      return { zakazky: r.sort((a, b) => (['VYDANO', 'ZRUSENO'].includes(a.stav) - ['VYDANO', 'ZRUSENO'].includes(b.stav)) || b.id - a.id).map((z) => { const d = zakazkaDict(z); return { ...d, heslo: z.heslo ? '••••' : null }; }),
+        pocty, hori_lhuta: DB.servis.filter(hori).length, stavy: STAVY_SV, vyrizeni: VYRIZENI_SV };
+    }],
+    ['GET', /^\/api\/servis\/(\d+)$/, (m) => { prihlasen(); return zakazkaDict(zakazka(m[1])); }],
+    ['POST', /^\/api\/servis$/, (m, q, b) => {
+      const u = prihlasen();
+      if (!b.zakaznik || !b.zarizeni || !b.zavada) throw new Chyba(422, 'Vyplňte zákazníka, zařízení a závadu');
+      if (b.typ === 'REKLAMACE' && !(b.prodej_id || b.doklad_koupe || b.datum_koupe)) throw new Chyba(400, 'U reklamace vyplňte doklad o koupi nebo datum nákupu');
+      return zakazkaDict(novaZakazka(DB, b, u.id));
+    }],
+    ['PUT', /^\/api\/servis\/(\d+)$/, (m, q, b) => {
+      prihlasen(); const z = zakazka(m[1]); otevrena(z);
+      POLE_SV.forEach((k) => { if (k === 'heslo' && b.heslo === '••••') return; const v = b[k]; z[k] = typeof v === 'string' ? (v.trim() || null) : (v ?? null); }); z.upraveno = ted();
+      return zakazkaDict(z);
+    }],
+    ['POST', /^\/api\/servis\/(\d+)\/stav$/, (m, q, b) => {
+      const u = prihlasen(); const z = zakazka(m[1]); otevrena(z);
+      if (!STAVY_SV[b.stav] || b.stav === 'VYDANO') throw new Chyba(400, 'Neplatný stav');
+      let popis = STAVY_SV[b.stav];
+      if (b.vyjadreni != null) z.vyjadreni = b.vyjadreni.trim() || null;
+      if (b.stav === 'U_DODAVATELE') {
+        const dod = (b.dodavatel || z.dodavatel || '').trim(); if (!dod) throw new Chyba(400, 'Vyplňte, komu se zařízení posílá (dodavatel, výrobce, servis)');
+        Object.assign(z, { dodavatel: dod, dodavatel_rma: (b.dodavatel_rma || z.dodavatel_rma || '').trim() || null, odeslano_dodavateli: ted() });
+        popis += `: ${dod}${z.dodavatel_rma ? ', RMA ' + z.dodavatel_rma : ''}`;
+      }
+      if (z.stav === 'U_DODAVATELE' && b.stav !== 'U_DODAVATELE') z.vraceno_od_dodavatele = ted();
+      if (b.stav === 'HOTOVO') {
+        const v = b.vyrizeni || z.vyrizeni; if (!VYRIZENI_SV[v]) throw new Chyba(400, 'Vyberte, jak byla zakázka vyřízena');
+        Object.assign(z, { vyrizeni: v, vyrizeno: z.vyrizeno || ted() }); popis += ` – ${VYRIZENI_SV[v]}`;
+      }
+      if (b.stav === 'ZRUSENO' && z.zaloha) throw new Chyba(409, 'Zakázka má zaplacenou zálohu – vydejte ji zákazníkovi a zálohu vraťte vratkou');
+      z.stav = b.stav; historie(DB, z.id, u.id, b.stav, popis + (b.text ? `. ${b.text}` : ''));
+      return zakazkaDict(z);
+    }],
+    ['POST', /^\/api\/servis\/(\d+)\/poznamka$/, (m, q, b) => { const u = prihlasen(); const z = zakazka(m[1]); historie(DB, z.id, u.id, null, String(b.text || '').trim()); return zakazkaDict(z); }],
+    ['POST', /^\/api\/servis\/(\d+)\/polozky$/, (m, q, b) => {
+      prihlasen(); const z = zakazka(m[1]); otevrena(z);
+      let pol;
+      if (b.zbozi_id) { const zb = zbozi(b.zbozi_id); if (!zb) throw new Chyba(404, 'Zboží nenalezeno'); pol = { zbozi_id: zb.id, nazev: zb.nazev, cena: b.cena == null ? zb.cena : b.cena, sazba_dph: zb.sazba_dph }; }
+      else { if (!b.nazev || b.cena == null) throw new Chyba(400, 'Práce nebo díl mimo katalog potřebuje název a cenu'); pol = { zbozi_id: null, nazev: b.nazev.trim(), cena: b.cena, sazba_dph: b.sazba_dph ?? 21 }; }
+      DB.servis_polozky.push({ id: DB.dalsi.spol++, zakazka_id: z.id, mnozstvi: b.mnozstvi || 1, ...pol }); z.upraveno = ted();
+      return zakazkaDict(z);
+    }],
+    ['DELETE', /^\/api\/servis\/(\d+)\/polozky\/(\d+)$/, (m) => {
+      prihlasen(); const z = zakazka(m[1]); otevrena(z);
+      DB.servis_polozky = DB.servis_polozky.filter((p) => !(p.id === +m[2] && p.zakazka_id === z.id)); return zakazkaDict(z);
+    }],
+    ['POST', /^\/api\/servis\/(\d+)\/zaloha$/, (m, q, b) => {
+      const u = prihlasen(); const z = zakazka(m[1]); otevrena(z);
+      const p = prodej(DB, { platba: b.platba, prijato: b.prijato, polozky: [{ nazev: `Záloha na opravu ${z.cislo}`, mnozstvi: 1, cena: b.castka, sazba_dph: 21 }] });
+      z.zaloha = (z.zaloha || 0) + b.castka; historie(DB, z.id, u.id, null, `Přijata záloha ${(b.castka / 100).toLocaleString('cs-CZ', { minimumFractionDigits: 2 })} Kč (${b.platba === 'HOTOVE' ? 'hotově' : 'kartou'})`);
+      return { zakazka: zakazkaDict(z), prodej: prodejDict(p) };
+    }],
+    ['POST', /^\/api\/servis\/(\d+)\/vydat$/, (m, q, b) => {
+      const u = prihlasen(); const z = zakazka(m[1]); otevrena(z); const d = zakazkaDict(z);
+      if (z.typ === 'REKLAMACE' && !z.vyrizeni) throw new Chyba(400, 'Nejdřív zapište, jak byla reklamace vyřízena');
+      let p = null;
+      if (b.platba === 'HOTOVE' || b.platba === 'KARTA') {
+        const pol = d.polozky.map((x) => (x.zbozi_id ? { zbozi_id: x.zbozi_id, mnozstvi: x.mnozstvi, cena: x.cena } : { nazev: x.nazev, mnozstvi: x.mnozstvi, cena: x.cena, sazba_dph: x.sazba_dph }));
+        if (z.zaloha) pol.push({ nazev: `Odečtení zálohy ${z.cislo}`, mnozstvi: 1, cena: -z.zaloha, sazba_dph: 21 });
+        if (!pol.length) throw new Chyba(400, 'Zakázka nemá žádnou práci ani díl k zaplacení – vydejte ji jako bezplatnou');
+        p = prodej(DB, { platba: b.platba, prijato: b.prijato, polozky: pol }); z.prodej_vydani_id = p.id;
+      } else if (b.platba === 'FAKTURA') z.faktura_id = b.faktura_id;
+      else {
+        if (z.zaloha) throw new Chyba(409, 'Zakázka má zaplacenou zálohu – vydejte ji s platbou nebo zálohu vraťte vratkou');
+        const dily = d.polozky.filter((x) => x.zbozi_id);
+        if (dily.length) {
+          const cas = ted(); const cislo = `V${cas.slice(0, 4)}-${String(dalsiCislo(DB, 'vydejka-' + cas.slice(0, 4))).padStart(5, '0')}`; const vid = DB.dalsi.vydejka++;
+          let celkem = 0;
+          dily.forEach((x) => { const zb = zbozi(x.zbozi_id); DB.vydejka_polozky.push({ vydejka_id: vid, zbozi_id: zb.id, mnozstvi: x.mnozstvi, nakupni_cena: zb.nakupni_cena }); pohyb(DB, zb.id, -x.mnozstvi, 'VYDEJ', cislo, u.id, `servis ${z.cislo}`); celkem += Math.round((zb.nakupni_cena || 0) * x.mnozstvi); });
+          DB.vydejky.push({ id: vid, cislo, cas, uzivatel_id: u.id, duvod: 'SPOTREBA', komu: `servis ${z.cislo}`, poznamka: 'díly na bezplatnou / záruční opravu', celkem_nakup: celkem, stornovano: 0 });
+          z.vydejka_id = vid;
+        }
+      }
+      Object.assign(z, { stav: 'VYDANO', vydano: ted(), vydal_id: u.id, vyrizeno: z.vyrizeno || ted() });
+      historie(DB, z.id, u.id, 'VYDANO', 'Vydáno zákazníkovi' + { HOTOVE: ', zaplaceno hotově', KARTA: ', zaplaceno kartou', FAKTURA: ', na fakturu', ZDARMA: ' bez platby' }[b.platba]);
+      return { zakazka: zakazkaDict(z), prodej: p ? prodejDict(p) : null };
+    }],
+    ['POST', /^\/api\/servis\/(\d+)\/email$/, () => { throw new Chyba(400, 'V demu se e-maily neodesílají.'); }],
+    ['GET', /^\/api\/serie$/, (m, q) => {
+      prihlasen(); const t = (q.get('q') || '').trim(); if (t.length < 3) return [];
+      return DB.serie.filter((x) => x.sn.includes(t)).slice(-20).reverse().map((x) => {
+        const p = x.prodej_id ? DB.prodeje.find((y) => y.id === x.prodej_id) : null; const f = x.faktura_id ? DB.faktury.find((y) => y.id === x.faktura_id) : null;
+        return { ...x, prodejka: p ? p.cislo : null, stornovano: p ? p.stornovano : 0, faktura: f ? f.cislo : null, v_zaruce: !!(x.zaruka_do && x.zaruka_do >= ted().slice(0, 10)) };
+      });
+    }],
+    ['POST', /^\/api\/zbozi\/interni-ean$/, (m, q, b) => {
+      spravce(); const prideleno = [];
+      const ids = (b.ids && b.ids.length) ? b.ids : DB.zbozi.filter((z) => z.aktivni && !eanyZbozi(z.id).length).map((z) => z.id);
+      ids.forEach((zid) => {
+        if (eanyZbozi(zid).length) return;
+        let kod;
+        do { const z12 = '29' + String(dalsiCislo(DB, 'interni-ean')).padStart(10, '0'); const s = [...z12].reduce((a, c, i) => a + +c * (i % 2 ? 3 : 1), 0); kod = z12 + ((10 - s % 10) % 10); } while (DB.eany[kod]);
+        DB.eany[kod] = zid; prideleno.push({ zbozi_id: zid, ean: kod });
+      });
+      return { prideleno };
+    }],
+    ['GET', /^\/api\/sklad\/objednavka$/, () => {
+      prihlasen(); const od30 = plus(ted().slice(0, 10), -30); const od90 = plus(ted().slice(0, 10), -90);
+      return DB.zbozi.filter((z) => z.aktivni && z.min_stav > 0 && z.stav <= z.min_stav).sort((a, b) => a.nazev.localeCompare(b.nazev, 'cs')).map((z) => {
+        const prodano = (od) => Math.max(0, -DB.pohyby.filter((p) => p.zbozi_id === z.id && p.typ === 'PRODEJ' && p.cas.slice(0, 10) >= od).reduce((s, p) => s + p.mnozstvi, 0));
+        const pp = DB.prijemka_polozky.filter((x) => x.zbozi_id === z.id).map((x) => ({ ...x, p: DB.prijemky.find((y) => y.id === x.prijemka_id) })).filter((x) => x.p && !x.p.stornovano).pop();
+        const dod = pp ? klicDodavatele(pp.p.dodavatel_ico, pp.p.dodavatel) : null;
+        const kod = dod ? Object.entries(DB.dodavatel_kody).filter(([k, v]) => k.startsWith(dod + '|') && v.zbozi_id === z.id).map(([k]) => k.split('|')[1]).pop() || null : null;
+        const p30 = prodano(od30);
+        return { zbozi_id: z.id, nazev: z.nazev, kod: z.kod, ean: eanyZbozi(z.id)[0] || null, jednotka: z.jednotka, stav: z.stav, min_stav: z.min_stav, prodano_30: p30, prodano_90: prodano(od90),
+          navrh: Math.max(Math.ceil(Math.max(2 * z.min_stav, z.min_stav + p30) - z.stav), 1), nakupni_cena: (pp && pp.nakupni_cena) || z.nakupni_cena,
+          dodavatel: pp ? pp.p.dodavatel : null, dodavatel_ico: pp ? pp.p.dodavatel_ico : null, posledni_prijem: pp ? pp.p.cas.slice(0, 10) : null, kod_dodavatele: kod };
+      });
+    }],
     ['POST', /^\/api\/uzaverka\/odeslat$/, () => { prihlasen(); throw new Chyba(400, 'V demu se e-maily neodesílají – ve skutečné pokladně odejde uzávěrka se souhrnem a měsíčním Excelem.'); }],
     ['POST', /^\/api\/email\/test$/, () => { spravce(); throw new Chyba(400, 'V demu se e-maily neodesílají.'); }],
 

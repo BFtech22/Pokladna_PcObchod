@@ -56,6 +56,10 @@ def den(con: sqlite3.Connection, datum: str) -> dict:
             "vecer": stav(con, zitra), "pocitani": _pocitani_dict(pocitani) if pocitani else None}
 
 
+def prodejek(n: int) -> str:
+    return f"{n} prodejka" if n == 1 else f"{n} prodejky" if 2 <= n <= 4 else f"{n} prodejek"
+
+
 def _pocitani_dict(r) -> dict:
     d = dict(r)
     d["rozpis"] = json.loads(d["rozpis"]) if d.get("rozpis") else {}
@@ -145,12 +149,6 @@ def kniha(mesic: Optional[str] = None, u=Depends(uzivatel), con: sqlite3.Connect
     pocatek = stav(con, zacatek)
     radky = []
     for r in con.execute(
-            "SELECT substr(cas, 1, 10) AS datum, COUNT(*) AS pocet, SUM(celkem) AS celkem, MAX(cas) AS cas FROM prodeje "
-            "WHERE platba = 'HOTOVE' AND cas LIKE ? GROUP BY substr(cas, 1, 10)", (f"{mesic}%",)):
-        if r["celkem"]:
-            radky.append({"druh": "TRZBY", "cas": r["datum"] + "T23:59:59", "datum": r["datum"], "cislo": None,
-                          "text": f"Tržby hotově ({r['pocet']} prodejek)", "prijem": max(r["celkem"], 0), "vydej": max(-r["celkem"], 0)})
-    for r in con.execute(
             "SELECT d.*, u.jmeno AS uzivatel FROM pokladni_doklady d LEFT JOIN uzivatele u ON u.id = d.uzivatel_id "
             "WHERE d.cas LIKE ? ORDER BY d.cas", (f"{mesic}%",)):
         d = dict(r)
@@ -158,6 +156,19 @@ def kniha(mesic: Optional[str] = None, u=Depends(uzivatel), con: sqlite3.Connect
                       "text": d["ucel"] or DRUHY.get(d["druh"], (None, d["druh"]))[1], "osoba": d["osoba"], "uzivatel": d["uzivatel"],
                       "stornovano": d["stornovano"],
                       "prijem": d["castka"] if d["typ"] == "PRIJEM" else 0, "vydej": d["castka"] if d["typ"] == "VYDEJ" else 0})
+    # Hotové prodejky se sčítají do jednoho řádku za úsek dne mezi pokladními doklady, aby zůstatek seděl v každém okamžiku.
+    hranice = sorted(r["cas"] for r in radky)
+    useky: dict = {}
+    for r in con.execute("SELECT cas, celkem FROM prodeje WHERE platba = 'HOTOVE' AND cas LIKE ? ORDER BY cas", (f"{mesic}%",)):
+        dalsi = next((h for h in hranice if h > r["cas"] and h[:10] == r["cas"][:10]), None)
+        u_ = useky.setdefault((r["cas"][:10], dalsi), {"pocet": 0, "celkem": 0, "cas": r["cas"]})
+        u_["pocet"] += 1
+        u_["celkem"] += r["celkem"]
+        u_["cas"] = r["cas"]
+    for (datum, _), u_ in useky.items():
+        if u_["celkem"]:
+            radky.append({"druh": "TRZBY", "cas": u_["cas"], "datum": datum, "cislo": None,
+                          "text": f"Tržby hotově ({prodejek(u_['pocet'])})", "prijem": max(u_["celkem"], 0), "vydej": max(-u_["celkem"], 0)})
     radky.sort(key=lambda x: x["cas"])
     zustatek = pocatek
     for r in radky:

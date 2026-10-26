@@ -2,16 +2,32 @@
 
 Lokální pokladna se skladem a EET 2.0 pro prodejny PcObchod (Rumburk, Varnsdorf). Server běží v prodejně, obsluha je ve webovém prohlížeči z libovolného zařízení na síti prodejny. Každá prodejna má vlastní instalaci a databázi, protože jde o dvě firmy s vlastním EIČ a certifikátem.
 
-## Co umí (stav 25. 10. 2026)
+## Co umí (stav 26. 10. 2026)
 
 - **Prodej:** načtení čtečkou EAN (`3*kód` = 3 kusy), hledání podle názvu bez ohledu na diakritiku, změna ceny a sleva, položka mimo katalog, vratka, platba hotově se zaokrouhlením a výpočtem vrácení, platba kartou. Klávesy F2 (hotově), F3 (kartou) a F8 (zrušit).
 - **EET 2.0:** tržba se odesílá hned při prodeji (mezní doba odezvy, výchozí 3 s). Když to nejde, fronta na pozadí zkouší odeslání každých 30 s (zákonná lhůta je 48 h). Storno odešle zápornou tržbu. V hlavičce je ukazatel stavu EET.
 - **Prodejky:** přehled po dnech, detail, storno, ruční opakované odeslání do EET a tisk na 80mm tiskárnu (zjednodušený daňový doklad s rekapitulací DPH).
-- **Faktury vydané (po vzoru iDokladu):**
-  - přehled se souhrnem neuhrazených a po splatnosti, záložky Vše / Neuhrazené / Po splatnosti / Uhrazené,
-  - adresář kontaktů a doplnění firmy z ARES podle IČO,
-  - faktura z košíku, k už zaplacené prodejce nebo nová; placená hotově nebo kartou vytvoří i prodejku s EET, převodem vydá zboží ze skladu bez EET,
-  - náhled a tisk A4, PDF s QR platbou, odeslání e-mailem, označení úhrady, storno a kopie.
+- **Doklady vydané (po vzoru iDokladu):**
+  - **faktury**: z košíku, k už zaplacené prodejce nebo nové; placená hotově nebo kartou vytvoří i prodejku s EET, převodem vydá zboží ze skladu bez EET,
+  - **zálohové faktury**: po zaplacení vznikne sám daňový doklad k přijaté platbě; konečná faktura zálohu odečte,
+  - **opravné daňové doklady (dobropisy)** k faktuře s důvodem opravy; vrácené zboží jde naskladnit zpět,
+  - **cenové nabídky** s platností; z nabídky jedním tlačítkem faktura nebo záloha,
+  - **přenesená daňová povinnost** (mobily, notebooky nad 100 tis. pro plátce): ceny bez DPH, text podle § 92a,
+  - vlastní číselné řady a variabilní symboly, které se mezi řadami nepletou,
+  - **upomínky** e-mailem jednotlivě i hromadně všem po splatnosti,
+  - **banka**: načtení výpisu (GPC/ABO, XML camt.053, CSV z Fio, MONETA…) a spárování plateb s fakturami podle VS a částky, ruční spárování zbytku,
+  - adresář kontaktů a ARES, náhled a tisk A4, PDF s QR platbou, ISDOC, odeslání e-mailem, storno a kopie.
+- **Pokladní kniha:** hotovost v šuplíku z prodejek a pokladních dokladů. Vklad, výběr, odvod tržby a nákup za hotové jako příjmový a výdajový pokladní doklad s tiskem (i částka slovy). Spočítání pokladny po bankovkách a mincích, manko nebo přebytek se zapíše. Měsíční kniha s průběžným zůstatkem.
+- **Export pro účetní:** jeden ZIP za měsíc: přehled v Excelu (souhrn DPH, tržby po dnech, prodejky, vydané doklady, příjemky, výdejky, pokladní doklady, stav skladu), vydané doklady v PDF a ISDOC 6.0.2 (ověřeno proti oficiálnímu schématu) a přijaté faktury dodavatelů. Stáhnout nebo poslat účetní e-mailem.
+- **Servis a reklamace:**
+  - zakázky na opravu i reklamace: zákazník, zařízení, IMEI / SN, příslušenství, stav při převzetí, kód odemčení, závada, předběžná cena a souhlas do částky, termín,
+  - reklamace hlídá zákonnou lhůtu 30 dní (filtr „Hoří lhůta“), doklad o koupi se dohledá podle IMEI,
+  - stavy od přijetí přes diagnostiku, čekání na díl nebo zákazníka a předání dodavateli (s číslem RMA) až po vyzvednutí, historie s poznámkami,
+  - práce a díly ze skladu, záloha přes pokladnu (s EET), výdej s prodejkou, na fakturu nebo zdarma (díly výdejkou),
+  - tisk: převzetí do servisu, potvrzení o uplatnění reklamace, potvrzení o vyřízení (s dobou vyřízení), štítek na zařízení s čárovým kódem; e-mail zákazníkovi.
+- **Sériová čísla / IMEI a záruka:** u zboží s evidencí se při prodeji načte číslo každého kusu; je na účtence, v záručním listu a dohledá se při reklamaci.
+- **Štítky a cenovky:** EAN-13, EAN-8 a Code 128 kreslené přímo v prohlížeči; štítky 50 × 30, 40 × 25 mm na tiskárnu štítků nebo arch A4 24 ks. Ze zboží, z příjemky (počet podle přijatého množství) i ze servisu. Interní EAN 29… pro zboží bez kódu.
+- **Návrh objednávky:** zboží na minimálním stavu podle dodavatelů z posledního příjmu, s prodejem za 30 a 90 dní; tisk, CSV a zkopírování seznamu.
 - **Uzávěrka e-mailem:** souhrn dne v těle e-mailu a měsíční přehled v Excelu (dny, prodejky, prodané zboží). Odesílá se tlačítkem nebo automaticky v nastavený čas přes SMTP účet prodejny.
 - **Zboží:** katalog s více EAN na položku, kategorie, prodejní a nákupní cena, marže, minimální stav a historie pohybů.
 - **Sklad:**
@@ -22,10 +38,11 @@ Lokální pokladna se skladem a EET 2.0 pro prodejny PcObchod (Rumburk, Varnsdor
   - pohyby: každý pohyb zboží (příjem, prodej, výdej, storno, korekce) se stavem po pohybu.
 - **Naskladnění z faktury:** nahraje se faktura dodavatele a pokladna z ní vytáhne položky a spáruje je s katalogem.
   - Formáty: ISDOC, ISDOCX nebo PDF. Z PDF se nejdřív zkusí vložený ISDOC, pak čtení přes Claude (když je v nastavení API klíč) a nakonec odhad z textu PDF.
+  - Odhad z textu čte PDF v rozvržení sloupců: číslo dokladu, IČO a DIČ dodavatele (ne vlastní), název dodavatele, řádky „množství × cena = celkem“ i dvouřádkové položky. Na 65 skutečných fakturách různých dodavatelů našel položky u 45, naskenovaná PDF přečte jen Claude.
   - Párování: podle EAN, podle zapamatovaného kódu dodavatele, podle interního kódu a nakonec podle podobného názvu (jen jako návrh ke kontrole).
   - Pokladna si pamatuje i počet kusů v balení. Neznámé položky jde rovnou založit, cena se navrhne podle výchozí marže. Doprava a poplatky se přeskakují.
   - Upozorní na fakturu, která už byla naskladněna. Soubor faktury se uloží k příjemce.
-- **Uzávěrka:** tržba hotově a kartou, storna, DPH, přehled po prodavačích a EET, tisk.
+- **Uzávěrka:** tržba hotově a kartou, storna, DPH, hotovost v pokladně (ráno, tržby, vklady, výběry, má být), přehled po prodavačích a EET, tisk.
 - **Uživatelé:** přihlášení PINem, role prodavač a správce.
 - **Záloha:** každý den šifrovaná záloha (AES-256) databáze, faktur a certifikátů. Odchází mimo prodejnu přes rclone (Google Disk a další) nebo na USB disk či NAS. Správce vidí upozornění, když 36 h neodešla, obnova je jedním příkazem.
 - **Certifikát EET:** nahrává se přes rozhraní (soubor .p12 a heslo), EIČ se vyplní samo.
@@ -72,13 +89,19 @@ Pak otevřít http://localhost:8080, z jiného zařízení v síti `http://<adre
 | `pokladna/eet_fronta.py` | odeslání při prodeji a fronta na pozadí |
 | `pokladna/db.py` | SQLite schéma, částky v haléřích |
 | `pokladna/faktury.py` | čtení faktur (ISDOC, PDF, Claude API) a párování položek s katalogem |
-| `pokladna/fakturace.py` | vydané faktury: PDF, QR platba (SPAYD), IBAN |
+| `pokladna/fakturace.py` | vydané doklady všech typů: PDF, ISDOC, QR platba (SPAYD), IBAN, upomínky |
+| `pokladna/kasa.py` | pokladní kniha: hotovost, pokladní doklady, spočítání pokladny |
+| `pokladna/servis.py` | servisní zakázky a reklamace, sériová čísla |
+| `pokladna/banka.py` | čtení bankovních výpisů a párování plateb |
+| `pokladna/export_ucetni.py` | měsíční ZIP pro účetní |
+| `pokladna/web.py` | společné závislosti API (databáze, přihlášený uživatel) |
 | `pokladna/posta.py` | e-maily přes SMTP, uzávěrka s Excelem, automatické odeslání |
 | `pokladna/uzaverka.py` | souhrn dne a měsíční přehled |
 | `pokladna/zaloha.py` | šifrovaná záloha, odeslání mimo prodejnu, plán a obnova (`python -m pokladna.zaloha`) |
 | `instalace/` | instalační skript, služba systemd a návod pro prodejnu |
 | `pokladna/server.py` | FastAPI: JSON API a statické rozhraní |
-| `pokladna/static/` | webové rozhraní (bez sestavování), loga PcObchod |
+| `pokladna/static/` | webové rozhraní (bez sestavování): `app.js` jádro, prodej, zboží a sklad; `faktury.js`, `kasa.js`, `servis.js`, `stitky.js`; loga PcObchod |
+| `_zdroje/isdoc_schema/` | oficiální XSD ISDOC 6.0.2 pro kontrolu exportu |
 | `_zdroje/eet2_dokumentace/` | oficiální dokumentace EET 2.0, XSD, WSDL a testovací certifikáty |
 
 ## EET – přechod na ostrý provoz
