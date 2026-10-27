@@ -71,7 +71,7 @@ Demo je složka `docs/` (GitHub Pages: Settings → Pages → Deploy from branch
 .venv/bin/python -I _zdroje/skripty/postav_demo.py
 ```
 
-Ochrana stojí jen na hesle: zašifrovaný soubor si může stáhnout kdokoli, takže heslo musí být dlouhé a náhodné (vygenerované má 16 znaků) a posílá se jen lidem, kteří sklad vidět mají.
+Ochrana stojí jen na hesle: zašifrovaný soubor si může stáhnout kdokoli, takže heslo musí být dlouhé a náhodné (vygenerované má 16 písmen bez y/z a číslic, ať se dá napsat i na české klávesnici; na velikosti písmen, mezerách a pomlčkách nezáleží) a posílá se jen lidem, kteří sklad vidět mají.
 
 ## Instalace a spuštění
 

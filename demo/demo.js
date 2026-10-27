@@ -131,11 +131,15 @@
     if (!r.ok) throw new Error('Soubor se skladem se nepodařilo stáhnout.');
     const b = new Uint8Array(await r.arrayBuffer());
     if (new TextDecoder().decode(b.slice(0, 4)) !== 'PKS1') throw new Error('Neznámý formát souboru se skladem.');
-    const material = await crypto.subtle.importKey('raw', new TextEncoder().encode(heslo.trim()), 'PBKDF2', false, ['deriveKey']);
+    if (!window.crypto || !crypto.subtle || !window.DecompressionStream) throw new Error('Tento prohlížeč je na rozšifrování skladu moc starý, zkuste aktuální Chrome nebo Safari.');
+    // Stejně jako zasifruj_sklad_demo.py: nezáleží na velikosti písmen, mezerách, pomlčkách ani na číslicích psaných bez Shiftu (ě š č…).
+    const ciste = [...heslo.normalize('NFC').toLowerCase()].map((c) => { const i = '+ěščřžýáíé'.indexOf(c); return i < 0 ? c : '1234567890'[i]; })
+      .filter((c) => !/[\s\-_.]/.test(c)).join('');
+    const material = await crypto.subtle.importKey('raw', new TextEncoder().encode(ciste), 'PBKDF2', false, ['deriveKey']);
     const klic = await crypto.subtle.deriveKey({ name: 'PBKDF2', salt: b.slice(4, 20), iterations: 600000, hash: 'SHA-256' }, material,
       { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
     let gz;
-    try { gz = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b.slice(20, 32) }, klic, b.slice(32)); } catch { throw new Error('Špatné heslo.'); }
+    try { gz = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b.slice(20, 32) }, klic, b.slice(32)); } catch { throw new Error('Špatné heslo. Zkontrolujte ho přes „Zobrazit heslo“.'); }
     return JSON.parse(await new Response(new Blob([gz]).stream().pipeThrough(new DecompressionStream('gzip'))).text());
   }
 
@@ -1096,12 +1100,15 @@
       <div class="telo"><p class="mut" style="margin-top:0">Katalog a stav skladu z Trellu jsou na GitHubu zašifrované. Po zadání hesla se rozšifrují
         jen v tomto prohlížeči a místo ukázkových dat uvidíte celý sklad (13 639 karet). Nikam se nic neposílá.</p>
         <input type="text" name="username" value="sklad-varnsdorf" autocomplete="username" hidden>
-        <input type="password" id="demo-heslo" placeholder="Heslo" autocomplete="current-password" required>
+        <input type="password" id="demo-heslo" placeholder="Heslo" autocomplete="current-password" autocapitalize="off" spellcheck="false" required>
+        <label class="zatrh" style="margin-top:8px"><input type="checkbox" id="demo-ukaz"> Zobrazit heslo</label>
+        <p class="mut2" style="margin:6px 0 0">Na velikosti písmen, mezerách ani pomlčkách nezáleží.</p>
         <div class="chyba-text" id="demo-chyba"></div></div>
       <div class="pata"><button type="button" class="btn" data-zpet>Zpět</button><button type="submit" class="btn hl">Odemknout</button></div></form>`;
     const f = z.querySelector('form'); const tl = f.querySelector('[type=submit]');
     const zavri = () => z.remove();
     z.querySelector('[data-zpet]').onclick = zavri;
+    z.querySelector('#demo-ukaz').onchange = (e) => { z.querySelector('#demo-heslo').type = e.target.checked ? 'text' : 'password'; };
     z.addEventListener('keydown', (e) => { if (e.key === 'Escape') zavri(); });
     f.onsubmit = async (e) => {
       e.preventDefault();
