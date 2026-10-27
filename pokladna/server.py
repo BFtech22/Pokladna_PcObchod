@@ -191,7 +191,7 @@ def _uloz_eany(con: sqlite3.Connection, zid: int, eany: List[str]) -> None:
 
 
 @app.get("/api/zbozi")
-def seznam_zbozi(q: str = "", vse: bool = False, filtr: str = "", limit: int = 100,
+def seznam_zbozi(q: str = "", vse: bool = False, filtr: str = "", limit: int = 100, razeni: str = "nazev",
                  u=Depends(uzivatel), con: sqlite3.Connection = Depends(con_dep)):
     sql = "SELECT * FROM zbozi WHERE 1=1"
     par: list = []
@@ -201,6 +201,10 @@ def seznam_zbozi(q: str = "", vse: bool = False, filtr: str = "", limit: int = 1
         sql += " AND stav <= min_stav"
     elif filtr == "zaporne":
         sql += " AND stav < 0"
+    elif filtr == "skladem":
+        sql += " AND stav > 0"
+    elif filtr == "bez_nakupni":
+        sql += " AND stav > 0 AND nakupni_cena IS NULL"
     q = q.strip()
     if q:
         # Každé slovo musí být v názvu nebo kategorii, bez ohledu na diakritiku a pořadí („kabel usb c“).
@@ -208,9 +212,23 @@ def seznam_zbozi(q: str = "", vse: bool = False, filtr: str = "", limit: int = 1
         podminka = " AND ".join("(norm(nazev) LIKE ? OR norm(kategorie) LIKE ?)" for _ in slova)
         sql += f" AND (id IN (SELECT zbozi_id FROM zbozi_ean WHERE ean = ?) OR kod = ? OR ({podminka}))"
         par += [q, q] + [x for s in slova for x in (f"%{s}%", f"%{s}%")]
-    sql += " ORDER BY nazev COLLATE NOCASE LIMIT ?"
+    sql += {"stav": " ORDER BY stav DESC, nazev COLLATE NOCASE", "hodnota": " ORDER BY MAX(stav, 0) * cena DESC, nazev COLLATE NOCASE"}.get(
+        razeni, " ORDER BY nazev COLLATE NOCASE") + " LIMIT ?"
     par.append(min(max(limit, 1), 1000))
     return [zbozi_dict(con, r) for r in con.execute(sql, par)]
+
+
+@app.get("/api/sklad/souhrn")
+def souhrn_skladu(u=Depends(uzivatel), con: sqlite3.Connection = Depends(con_dep)):
+    r = con.execute(
+        "SELECT COUNT(*) AS karet, COALESCE(SUM(stav > 0), 0) AS skladem, COALESCE(SUM(CASE WHEN stav > 0 THEN stav END), 0) AS kusu, "
+        "COALESCE(SUM(CASE WHEN stav > 0 THEN stav * cena END), 0) AS hodnota_prodej, "
+        "COALESCE(SUM(CASE WHEN stav > 0 THEN stav * nakupni_cena END), 0) AS hodnota_nakup, "
+        "COALESCE(SUM(stav > 0 AND nakupni_cena IS NULL), 0) AS bez_nakupni, COALESCE(SUM(stav < 0), 0) AS zaporne, "
+        "COALESCE(SUM(min_stav > 0 AND stav <= min_stav), 0) AS dochazi FROM zbozi WHERE aktivni = 1").fetchone()
+    d = dict(r)
+    d["hodnota_prodej"], d["hodnota_nakup"] = int(round(d["hodnota_prodej"])), int(round(d["hodnota_nakup"]))
+    return d
 
 
 @app.get("/api/zbozi/kod/{kod}")

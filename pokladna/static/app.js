@@ -7,6 +7,7 @@ const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const cislo2 = (h) => (h / 100).toLocaleString('cs-CZ', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const kc = (h) => (h == null ? '—' : cislo2(h) + ' Kč');
+const kcCele = (h) => Math.round(h / 100).toLocaleString('cs-CZ') + ' Kč';
 const mn = (q) => Number(q).toLocaleString('cs-CZ', { maximumFractionDigits: 3 });
 const datumCas = (iso) => (iso ? new Date(iso).toLocaleString('cs-CZ', { day: 'numeric', month: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '');
 const cas = (iso) => (iso ? new Date(iso).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' }) : '');
@@ -813,29 +814,44 @@ function viewSklad(pod = 'stav') {
   return skladStav();
 }
 
+let skladFiltr = 'skladem'; let skladRazeni = 'nazev';
 function skladStav() {
-  $('#sklad-obsah').innerHTML = `<div class="karta"><div class="hlav"><h2>Stav skladu</h2>
-    <div class="radek"><input type="search" id="s-q" placeholder="Hledat…" style="width:280px">
-    <select id="s-filtr" style="width:190px"><option value="">Vše</option><option value="dochazi">Dochází (≤ minimum)</option><option value="zaporne">Záporný stav</option></select></div></div>
+  $('#sklad-obsah').innerHTML = `<div class="dlazdice" id="s-dl"></div><div class="karta"><div class="hlav"><h2>Stav skladu</h2>
+    <div class="radek"><input type="search" id="s-q" placeholder="Hledat název, EAN, kód…" style="width:260px">
+    <select id="s-filtr" style="width:200px">${[['skladem', 'Skladem'], ['', 'Všechno zboží'], ['dochazi', 'Dochází (≤ minimum)'], ['zaporne', 'Záporný stav'], ['bez_nakupni', 'Skladem bez nákupní ceny']]
+    .map(([v, t]) => `<option value="${v}" ${v === skladFiltr ? 'selected' : ''}>${t}</option>`).join('')}</select>
+    <select id="s-razeni" style="width:170px">${[['nazev', 'Řadit podle názvu'], ['stav', 'Nejvíc kusů'], ['hodnota', 'Nejvyšší hodnota']]
+    .map(([v, t]) => `<option value="${v}" ${v === skladRazeni ? 'selected' : ''}>${t}</option>`).join('')}</select></div></div>
     <div id="s-seznam"></div></div>`;
   let casovac;
+  const souhrn = async () => {
+    try {
+      const d = await api('GET', '/api/sklad/souhrn');
+      $('#s-dl').innerHTML = `<div class="karta"><div class="pop">Zboží skladem</div><div class="hod">${d.skladem.toLocaleString('cs-CZ')} <small class="mut2">z ${d.karet.toLocaleString('cs-CZ')} karet</small></div></div>
+        <div class="karta"><div class="pop">Kusů na skladě</div><div class="hod">${mn(d.kusu)}</div></div>
+        <div class="karta"><div class="pop">Hodnota v prodejních cenách</div><div class="hod">${kcCele(d.hodnota_prodej)}</div></div>
+        <div class="karta"><div class="pop">Hodnota v nákupních cenách</div><div class="hod">${d.bez_nakupni === d.skladem && d.skladem ? '—' : kcCele(d.hodnota_nakup)}</div>${d.bez_nakupni ? `<div class="mut2">${d.bez_nakupni === d.skladem ? 'nákupní ceny zatím nejsou zadané' : `bez nákupní ceny ${d.bez_nakupni.toLocaleString('cs-CZ')} karet`}</div>` : ''}</div>
+        <div class="karta" style="${d.zaporne ? 'border-color:#efc4c4' : ''}"><div class="pop">Záporný stav</div><div class="hod" style="${d.zaporne ? 'color:var(--chyba)' : ''}">${d.zaporne.toLocaleString('cs-CZ')}</div></div>`;
+    } catch (e) { chyba(e); }
+  };
   const nacti = async () => {
     try {
-      const rows = await api('GET', `/api/zbozi?limit=1000&filtr=${$('#s-filtr').value}&q=${encodeURIComponent($('#s-q').value.trim())}`);
-      const hodnota = rows.reduce((s, z) => s + Math.max(z.stav, 0) * (z.nakupni_cena || 0), 0);
-      $('#s-seznam').innerHTML = rows.length ? `<table class="tab"><thead><tr><th>Zboží</th><th>EAN</th><th class="num">Skladem</th><th class="num">Minimum</th><th class="num">Nákup bez DPH</th><th class="num">Hodnota</th>${spravce() ? '<th></th>' : ''}</tr></thead><tbody>
-        ${rows.map((z) => `<tr><td><strong>${esc(z.nazev)}</strong>${z.kategorie ? `<div class="mut2">${esc(z.kategorie)}</div>` : ''}</td><td class="mono">${esc(z.eany[0] || '')}</td>
-          <td class="num" style="${z.stav <= z.min_stav ? 'color:var(--chyba);font-weight:700' : ''}">${mn(z.stav)} ${esc(z.jednotka)}</td><td class="num">${mn(z.min_stav)}</td>
-          <td class="num">${kc(z.nakupni_cena)}</td><td class="num">${z.nakupni_cena ? kc(Math.round(Math.max(z.stav, 0) * z.nakupni_cena)) : '—'}</td>
+      skladFiltr = $('#s-filtr').value; skladRazeni = $('#s-razeni').value;
+      const rows = await api('GET', `/api/zbozi?limit=1000&filtr=${skladFiltr}&razeni=${skladRazeni}&q=${encodeURIComponent($('#s-q').value.trim())}`);
+      $('#s-seznam').innerHTML = rows.length ? `<table class="tab"><thead><tr><th>Zboží</th><th>EAN / kód</th><th class="num">Skladem</th><th class="num">Minimum</th><th class="num">Prodejní cena</th><th class="num">Nákup bez DPH</th><th class="num">Hodnota (prodej)</th>${spravce() ? '<th></th>' : ''}</tr></thead><tbody>
+        ${rows.map((z) => `<tr><td><strong>${esc(z.nazev)}</strong>${z.kategorie ? `<div class="mut2">${esc(z.kategorie)}</div>` : ''}</td><td class="mono">${esc(z.eany[0] || z.kod || '')}</td>
+          <td class="num" style="${z.stav < 0 || (z.min_stav > 0 && z.stav <= z.min_stav) ? 'color:var(--chyba);font-weight:700' : ''}">${mn(z.stav)} ${esc(z.jednotka)}</td><td class="num">${z.min_stav ? mn(z.min_stav) : ''}</td>
+          <td class="num">${kc(z.cena)}</td><td class="num">${z.nakupni_cena != null ? kc(z.nakupni_cena) : '<span class="mut2">—</span>'}</td><td class="num">${z.stav > 0 ? kc(Math.round(z.stav * z.cena)) : ''}</td>
           ${spravce() ? `<td style="text-align:right"><button class="btn mala" data-inv="${z.id}">Inventura</button></td>` : ''}</tr>`).join('')}</tbody></table>
-        <div class="telo radek mezera"><span class="mut">${rows.length} položek</span><strong>Hodnota skladu v nákupních cenách: ${kc(Math.round(hodnota))}</strong></div>`
-        : '<div class="prazdno">Nic nenalezeno</div>';
-      $$('[data-inv]').forEach((b) => { b.onclick = () => inventura(rows.find((z) => z.id === +b.dataset.inv), nacti); });
+        <div class="telo mut">${rows.length === 1000 ? 'Zobrazeno prvních 1 000 položek – upřesněte hledání nebo filtr.' : `${tvar(rows.length, 'položka', 'položky', 'položek')}`}</div>`
+        : `<div class="prazdno">${skladFiltr === 'skladem' && !$('#s-q').value.trim() ? 'Na skladě zatím nic není. Zboží naskladníte příjmem, z faktury nebo importem z Trellu (Nastavení).' : 'Nic nenalezeno'}</div>`;
+      $$('[data-inv]').forEach((b) => { b.onclick = () => inventura(rows.find((z) => z.id === +b.dataset.inv), () => { souhrn(); nacti(); }); });
     } catch (e) { chyba(e); }
   };
   $('#s-q').oninput = () => { clearTimeout(casovac); casovac = setTimeout(nacti, 200); };
   $('#s-filtr').onchange = nacti;
-  nacti();
+  $('#s-razeni').onchange = nacti;
+  souhrn(); nacti();
 }
 
 function inventura(z, poUlozeni) {

@@ -465,12 +465,23 @@
       let r = DB.zbozi.filter((z) => q.get('vse') === 'true' || z.aktivni);
       if (q.get('filtr') === 'dochazi') r = r.filter((z) => z.stav <= z.min_stav);
       if (q.get('filtr') === 'zaporne') r = r.filter((z) => z.stav < 0);
+      if (q.get('filtr') === 'skladem') r = r.filter((z) => z.stav > 0);
+      if (q.get('filtr') === 'bez_nakupni') r = r.filter((z) => z.stav > 0 && z.nakupni_cena == null);
       const t = (q.get('q') || '').trim();
       if (t) {
         const sl = norm(t).split(/\s+/);
         r = r.filter((z) => DB.eany[t] === z.id || z.kod === t || sl.every((s) => norm(z.nazev).includes(s) || norm(z.kategorie).includes(s)));
       }
-      return r.sort((a, b) => a.nazev.localeCompare(b.nazev, 'cs')).slice(0, Math.min(+(q.get('limit') || 100), 1000)).map(zboziDict);
+      const razeni = { stav: (a, b) => b.stav - a.stav, hodnota: (a, b) => Math.max(b.stav, 0) * b.cena - Math.max(a.stav, 0) * a.cena }[q.get('razeni')];
+      return r.sort((a, b) => (razeni && razeni(a, b)) || a.nazev.localeCompare(b.nazev, 'cs')).slice(0, Math.min(+(q.get('limit') || 100), 1000)).map(zboziDict);
+    }],
+    ['GET', /^\/api\/sklad\/souhrn$/, () => {
+      prihlasen(); const r = DB.zbozi.filter((z) => z.aktivni); const s = r.filter((z) => z.stav > 0);
+      return { karet: r.length, skladem: s.length, kusu: s.reduce((x, z) => x + z.stav, 0),
+        hodnota_prodej: Math.round(s.reduce((x, z) => x + z.stav * z.cena, 0)),
+        hodnota_nakup: Math.round(s.reduce((x, z) => x + z.stav * (z.nakupni_cena || 0), 0)),
+        bez_nakupni: s.filter((z) => z.nakupni_cena == null).length, zaporne: r.filter((z) => z.stav < 0).length,
+        dochazi: r.filter((z) => z.min_stav > 0 && z.stav <= z.min_stav).length };
     }],
     ['GET', /^\/api\/zbozi\/kod\/(.+)$/, (m) => {
       prihlasen(); const kod = decodeURIComponent(m[1]).trim();
