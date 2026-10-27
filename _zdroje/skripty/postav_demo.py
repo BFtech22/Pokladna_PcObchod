@@ -25,6 +25,9 @@ def main() -> None:
     assert "static/demo.js" in index, "index.html nemá očekávaný skript app.js"
     (CIL / "index.html").write_text(index, encoding="utf-8")
     shutil.copy2(KOREN / "demo" / "demo.js", CIL / "static" / "demo.js")
+    # Skutečný sklad jen zašifrovaný heslem (vyrábí _zdroje/skripty/zasifruj_sklad_demo.py)
+    for enc in (KOREN / "demo").glob("*.enc"):
+        shutil.copy2(enc, CIL / "static" / enc.name)
     shutil.copy2(KOREN / "_zdroje" / "vzorove_faktury" / "FV2026-0815.isdoc", CIL / "vzorova_faktura.isdoc")
     (CIL / "manifest.webmanifest").write_text(json.dumps({
         "name": "Pokladna PcObchod – demo", "short_name": "Pokladna demo", "start_url": "./", "display": "standalone",

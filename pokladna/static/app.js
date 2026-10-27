@@ -1342,7 +1342,7 @@ function nastaveniImport() {
   $('#it-soubor').onchange = (e) => {
     soubor = e.target.files[0]; e.target.value = '';
     if (!soubor) return;
-    if (window.POKLADNA_DEMO) return toast('V demu se import z Trellu nedělá – ve skutečné pokladně se z exportu načte celý katalog a stav skladu.');
+    if (window.POKLADNA_DEMO) return toast('V demu se import z Trellu nedělá. Skutečný sklad Varnsdorf otevřete v liště dole: „🔒 skutečný sklad Varnsdorf“ (chráněno heslem).');
     $('#it-vysl').innerHTML = '<span class="mut">Načítám…</span>';
     const ctecka = new FileReader();
     ctecka.onload = async () => { data64 = String(ctecka.result).split(',')[1]; try { await odeslat(false); } catch (er) { $('#it-vysl').innerHTML = `<div class="upozorneni chyba">${esc(er.message)}</div>`; } };

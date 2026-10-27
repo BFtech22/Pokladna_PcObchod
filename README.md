@@ -64,6 +64,15 @@ Lokální pokladna se skladem a EET 2.0 pro prodejny PcObchod (Rumburk, Varnsdor
 
 Demo je složka `docs/` (GitHub Pages: Settings → Pages → Deploy from branch `main`, složka `/docs`). Po změně rozhraní se znovu sestaví příkazem `.venv/bin/python -I _zdroje/skripty/postav_demo.py`. Napodobenina serveru je v `demo/demo.js`.
 
+**Skutečný sklad Varnsdorf v demu (chráněno heslem).** V liště dema je odkaz „🔒 skutečný sklad Varnsdorf“. Katalog a stav skladu z Trellu jsou v repozitáři jen zašifrované (`demo/sklad-varnsdorf.enc`, PBKDF2-SHA256 600 000× + AES-256-GCM). Po zadání hesla se rozšifrují jen v prohlížeči, uloží se do jeho IndexedDB a demo pak pracuje s celým skladem. „Zpět na ukázková data“ je z prohlížeče zase smaže. Heslo není v repozitáři, je v `data/demo_heslo.txt`. Nový export z Trellu nebo jiné heslo:
+
+```
+.venv/bin/python -I _zdroje/skripty/zasifruj_sklad_demo.py [data/trell/Varnsdorf/TRELL-NEXT.xml] [--heslo NOVE_HESLO]
+.venv/bin/python -I _zdroje/skripty/postav_demo.py
+```
+
+Ochrana stojí jen na hesle: zašifrovaný soubor si může stáhnout kdokoli, takže heslo musí být dlouhé a náhodné (vygenerované má 16 znaků) a posílá se jen lidem, kteří sklad vidět mají.
+
 ## Instalace a spuštění
 
 Je potřeba Python 3.9 nebo novější.

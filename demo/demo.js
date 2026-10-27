@@ -8,6 +8,7 @@
   'use strict';
 
   const KLIC = 'pokladna.demo.db';
+  const REZIM_KLIC = 'pokladna.demo.rezim';   // 'sklad' = skutečný sklad z Trellu (v IndexedDB, do localStorage se nevejde)
   const VERZE = 5;
   window.POKLADNA_DEMO = true;
 
@@ -51,7 +52,7 @@
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}${o >= 0 ? '+' : '-'}${p(o / 60)}:${p(o % 60)}`;
   }
 
-  function novaDb() {
+  function novaDb(sklad) {
     const db = {
       verze: VERZE, citace: {}, relace: null, dalsi: { zbozi: 1, prodej: 1, polozka: 1, prijemka: 1, pohyb: 1, uzivatel: 3 },
       nastaveni: {
@@ -78,7 +79,8 @@
     db.dalsi.vydejka = 1;
     Object.assign(db.dalsi, { pokl: 1, poc: 1, serie: 1, servis: 1, spol: 1, shist: 1 });
     db.dalsi.odberatel = 1; db.dalsi.faktura = 1; db.dalsi.fpol = 1;
-    for (const [nazev, ean, kat, cena, nakup, stav, jed] of ZBOZI) {
+    if (sklad) naplnSklad(db, sklad);
+    else for (const [nazev, ean, kat, cena, nakup, stav, jed] of ZBOZI) {
       const id = db.dalsi.zbozi++;
       db.zbozi.push({ id, nazev, kod: null, kategorie: kat, cena: cena * 100, sazba_dph: 21, nakupni_cena: nakup * 100, jednotka: jed,
         stav: 0, min_stav: jed === 'ks' ? 2 : 20, aktivni: 1, poznamka: null, vytvoreno: ted(), upraveno: ted(), seriova_cisla: kat === 'Telefony' ? 1 : 0, zaruka_mesice: 24 });
@@ -88,16 +90,18 @@
     // Dvě ukázkové účtenky, ať účtenky a uzávěrka nejsou prázdné.
     db.relace = 2;
     vlozPokladniDoklad(db, 'PRIJEM', 'POCATECNI', 200000, 'Počáteční stav', null, 1);
-    prodej(db, { platba: 'HOTOVE', prijato: 100000, polozky: [{ zbozi_id: 1, mnozstvi: 2 }, { zbozi_id: 5, mnozstvi: 1 }] });
-    prodej(db, { platba: 'KARTA', polozky: [{ zbozi_id: 13, mnozstvi: 1 }] });
-    // Ukázkový kontakt a dvě faktury převodem: jedna po splatnosti, jedna uhrazená.
-    const o = { id: db.dalsi.odberatel++, nazev: 'Ukázková firma s.r.o.', ico: '12345678', dic: 'CZ12345678', ulice: 'Náměstí 1', psc: '408 01', mesto: 'Rumburk', email: 'nakup@example.com', telefon: null, poznamka: null, vytvoreno: ted(), upraveno: ted() };
-    db.odberatele.push(o);
     const pred = (dni) => { const d = new Date(); d.setDate(d.getDate() - dni); return d.toISOString().slice(0, 10); };
-    fakturaPrevodem(db, o, [{ zbozi_id: 9, mnozstvi: 2 }, { zbozi_id: 10, mnozstvi: 2 }], pred(20), null);
-    fakturaPrevodem(db, o, [{ zbozi_id: 12, mnozstvi: 3 }], pred(10), pred(3));
-    novaFaktura(db, o, { typ: 'NABIDKA', vystaveni: pred(2), splatnost: plus(pred(2), 14), forma: 'PREVOD', stav: 'NEUHRAZENO',
-      radky: radkyDokladu(db, [{ zbozi_id: 16, mnozstvi: 3 }, { nazev: 'Přenos dat a nastavení telefonu', mnozstvi: 3, cena: 30000, sazba_dph: 21 }], false, false) });
+    if (!sklad) {
+      prodej(db, { platba: 'HOTOVE', prijato: 100000, polozky: [{ zbozi_id: 1, mnozstvi: 2 }, { zbozi_id: 5, mnozstvi: 1 }] });
+      prodej(db, { platba: 'KARTA', polozky: [{ zbozi_id: 13, mnozstvi: 1 }] });
+      // Ukázkový kontakt a dvě faktury převodem: jedna po splatnosti, jedna uhrazená.
+      const o = { id: db.dalsi.odberatel++, nazev: 'Ukázková firma s.r.o.', ico: '12345678', dic: 'CZ12345678', ulice: 'Náměstí 1', psc: '408 01', mesto: 'Rumburk', email: 'nakup@example.com', telefon: null, poznamka: null, vytvoreno: ted(), upraveno: ted() };
+      db.odberatele.push(o);
+      fakturaPrevodem(db, o, [{ zbozi_id: 9, mnozstvi: 2 }, { zbozi_id: 10, mnozstvi: 2 }], pred(20), null);
+      fakturaPrevodem(db, o, [{ zbozi_id: 12, mnozstvi: 3 }], pred(10), pred(3));
+      novaFaktura(db, o, { typ: 'NABIDKA', vystaveni: pred(2), splatnost: plus(pred(2), 14), forma: 'PREVOD', stav: 'NEUHRAZENO',
+        radky: radkyDokladu(db, [{ zbozi_id: 16, mnozstvi: 3 }, { nazev: 'Přenos dat a nastavení telefonu', mnozstvi: 3, cena: 30000, sazba_dph: 21 }], false, false) });
+    }
     // Ukázkové zakázky v servisu: oprava a reklamace.
     novaZakazka(db, { typ: 'OPRAVA', zakaznik: 'Petr Ukázkový', telefon: '777 000 111', zarizeni: 'iPhone 12 černý', sn: '353000000000001',
       zavada: 'Prasklý displej, dotyk funguje', vzhled: 'oděrky na rámu', prislusenstvi: 'bez příslušenství', odhad: 290000, max_cena: 350000 }, 1);
@@ -107,12 +111,60 @@
     return db;
   }
 
+  // Skutečný sklad z Trellu (rozšifrovaný soubor sklad-varnsdorf.enc) zapíše stejně jako import v pokladně.
+  function naplnSklad(db, s) {
+    const i = Object.fromEntries(s.sloupce.map((n, k) => [n, k]));
+    const cas = ted();
+    Object.assign(db.nastaveni, { firma_nazev: 'PcObchod Vdf s.r.o. – DEMO', provozovna: `Prodejna ${s.prodejna} – sklad z Trellu ${new Date(s.export * 1000).toLocaleDateString('cs-CZ')}` });
+    for (const r of s.zbozi) {
+      const id = db.dalsi.zbozi++;
+      db.zbozi.push({ id, nazev: r[i.nazev], kod: r[i.kod], kategorie: r[i.kategorie], cena: r[i.cena], sazba_dph: 21, nakupni_cena: null, jednotka: 'ks',
+        stav: r[i.stav], min_stav: 0, aktivni: 1, poznamka: r[i.poznamka], vytvoreno: cas, upraveno: cas, seriova_cisla: r[i.seriova_cisla], zaruka_mesice: 24 });
+      r[i.eany].forEach((e) => { db.eany[e] = id; });
+      if (r[i.stav]) db.pohyby.push({ id: db.dalsi.pohyb++, cas, zbozi_id: id, mnozstvi: r[i.stav], typ: 'KOREKCE', doklad: 'import Trell', uzivatel_id: null, poznamka: 'stav z Trellu', stav_po: r[i.stav] });
+    }
+    db.zdroj = { prodejna: s.prodejna, export: s.export };
+  }
+
+  async function rozsifrujSklad(heslo) {
+    const r = await puvodniFetch('static/sklad-varnsdorf.enc', { cache: 'no-cache' });
+    if (!r.ok) throw new Error('Soubor se skladem se nepodařilo stáhnout.');
+    const b = new Uint8Array(await r.arrayBuffer());
+    if (new TextDecoder().decode(b.slice(0, 4)) !== 'PKS1') throw new Error('Neznámý formát souboru se skladem.');
+    const material = await crypto.subtle.importKey('raw', new TextEncoder().encode(heslo.trim()), 'PBKDF2', false, ['deriveKey']);
+    const klic = await crypto.subtle.deriveKey({ name: 'PBKDF2', salt: b.slice(4, 20), iterations: 600000, hash: 'SHA-256' }, material,
+      { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
+    let gz;
+    try { gz = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b.slice(20, 32) }, klic, b.slice(32)); } catch { throw new Error('Špatné heslo.'); }
+    return JSON.parse(await new Response(new Blob([gz]).stream().pipeThrough(new DecompressionStream('gzip'))).text());
+  }
+
+  function idb(akce, hodnota) {
+    return new Promise((ok, chyba) => {
+      const r = indexedDB.open('pokladna-demo', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('db');
+      r.onerror = () => chyba(r.error);
+      r.onsuccess = () => {
+        const t = r.result.transaction('db', akce === 'get' ? 'readonly' : 'readwrite');
+        const s = t.objectStore('db');
+        const q = akce === 'get' ? s.get('db') : akce === 'put' ? s.put(hodnota, 'db') : s.clear();
+        t.oncomplete = () => { r.result.close(); ok(q.result); };
+        t.onerror = t.onabort = () => { r.result.close(); chyba(t.error); };
+      };
+    });
+  }
+  const skladovyRezim = () => { try { return localStorage.getItem(REZIM_KLIC) === 'sklad'; } catch { return false; } };
+
   let DB;
+  let revEany = null;   // zboží → jeho EANy; počítá se jednou za požadavek (sklad z Trellu má přes 13 000 EANů)
   function nacti() {
     try { const d = JSON.parse(localStorage.getItem(KLIC)); if (d && d.verze === VERZE) return d; } catch { /* nové demo */ }
     return novaDb();
   }
-  function uloz() { try { localStorage.setItem(KLIC, JSON.stringify(DB)); } catch { /* bez úložiště demo jede jen do obnovení stránky */ } }
+  function uloz(metoda) {
+    if (DB.zdroj) { if (metoda !== 'GET') idb('put', DB).catch((e) => console.error('Demo: sklad se neuložil', e)); return; }
+    try { localStorage.setItem(KLIC, JSON.stringify(DB)); } catch { /* bez úložiště demo jede jen do obnovení stránky */ }
+  }
 
   /* ------------------------------------------------------------------ pomocné */
 
@@ -125,7 +177,11 @@
   function prihlasen() { const u = ja(); if (!u) throw new Chyba(401, 'Nepřihlášen'); return u; }
   function spravce() { const u = prihlasen(); if (u.role !== 'SPRAVCE') throw new Chyba(403, 'Jen pro správce'); return u; }
   const zbozi = (id) => DB.zbozi.find((z) => z.id === id);
-  const eanyZbozi = (id) => Object.keys(DB.eany).filter((e) => DB.eany[e] === id);
+  const eanyZbozi = (id) => {
+    if (!revEany) { revEany = {}; for (const [e, z] of Object.entries(DB.eany)) (revEany[z] = revEany[z] || []).push(e); }
+    return revEany[id] || [];
+  };
+  const KOLATOR = new Intl.Collator('cs');
   const zboziDict = (z) => ({ ...z, eany: eanyZbozi(z.id) });
 
   function pohyb(db, zid, mnozstvi, typ, doklad, uid, poznamka) {
@@ -444,6 +500,7 @@
     }
     for (const e of eanyZbozi(zid)) delete DB.eany[e];
     ciste.forEach((e) => { DB.eany[e] = zid; });
+    revEany = null;
   }
 
   const routes = [
@@ -473,7 +530,7 @@
         r = r.filter((z) => DB.eany[t] === z.id || z.kod === t || sl.every((s) => norm(z.nazev).includes(s) || norm(z.kategorie).includes(s)));
       }
       const razeni = { stav: (a, b) => b.stav - a.stav, hodnota: (a, b) => Math.max(b.stav, 0) * b.cena - Math.max(a.stav, 0) * a.cena }[q.get('razeni')];
-      return r.sort((a, b) => (razeni && razeni(a, b)) || a.nazev.localeCompare(b.nazev, 'cs')).slice(0, Math.min(+(q.get('limit') || 100), 1000)).map(zboziDict);
+      return r.sort((a, b) => (razeni && razeni(a, b)) || KOLATOR.compare(a.nazev, b.nazev)).slice(0, Math.min(+(q.get('limit') || 100), 1000)).map(zboziDict);
     }],
     ['GET', /^\/api\/sklad\/souhrn$/, () => {
       prihlasen(); const r = DB.zbozi.filter((z) => z.aktivni); const s = r.filter((z) => z.stav > 0);
@@ -565,7 +622,7 @@
         if (p.nakupni_cena != null) zbozi(p.zbozi_id).nakupni_cena = p.nakupni_cena;
         if (p.prodejni_cena != null) zbozi(p.zbozi_id).cena = p.prodejni_cena;
         if (p.kod_dodavatele && dod) DB.dodavatel_kody[dod + '|' + p.kod_dodavatele] = { zbozi_id: p.zbozi_id, koeficient: p.koeficient || 1 };
-        if (p.ean_z_faktury && !DB.eany[p.ean_z_faktury]) DB.eany[p.ean_z_faktury] = p.zbozi_id;
+        if (p.ean_z_faktury && !DB.eany[p.ean_z_faktury]) { DB.eany[p.ean_z_faktury] = p.zbozi_id; revEany = null; }
       }
       return { id, cislo, celkem_bez_dph: celkem };
     }],
@@ -937,7 +994,7 @@
         if (eanyZbozi(zid).length) return;
         let kod;
         do { const z12 = '29' + String(dalsiCislo(DB, 'interni-ean')).padStart(10, '0'); const s = [...z12].reduce((a, c, i) => a + +c * (i % 2 ? 3 : 1), 0); kod = z12 + ((10 - s % 10) % 10); } while (DB.eany[kod]);
-        DB.eany[kod] = zid; prideleno.push({ zbozi_id: zid, ean: kod });
+        DB.eany[kod] = zid; revEany = null; prideleno.push({ zbozi_id: zid, ean: kod });
       });
       return { prideleno };
     }],
@@ -963,7 +1020,13 @@
 
   /* ------------------------------------------------------------------ fetch */
 
-  DB = nacti(); uloz();   // až po definici všech pomocných funkcí (const nejsou hoistované)
+  // až po definici všech pomocných funkcí (const nejsou hoistované); skutečný sklad se čte z IndexedDB asynchronně
+  let pripraveno = Promise.resolve();
+  if (skladovyRezim()) {
+    pripraveno = idb('get').then((d) => { DB = d && d.verze === VERZE && d.zdroj ? d : null; }, () => {}).then(() => {
+      if (!DB) { try { localStorage.removeItem(REZIM_KLIC); } catch { /* nic */ } DB = nacti(); uloz(); }
+    });
+  } else { DB = nacti(); uloz(); }
 
   const puvodniFetch = window.fetch.bind(window);
   window.fetch = async function (vstup, init) {
@@ -973,17 +1036,19 @@
     if (i < 0) return puvodniFetch(vstup, init);
     const cesta = url.pathname.slice(i);
     const metoda = (init.method || 'GET').toUpperCase();
+    await pripraveno;
+    revEany = null;
     await new Promise((r) => setTimeout(r, 40));
     const json = (data, status) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
     try {
       const telo = init.body ? JSON.parse(init.body) : {};
       for (const [m, re, fn] of routes) {
         const shoda = m === metoda && cesta.match(re);
-        if (shoda) { const v = await fn(shoda, url.searchParams, telo); uloz(); return json(v === undefined ? {} : v, 200); }
+        if (shoda) { const v = await fn(shoda, url.searchParams, telo); uloz(metoda); return json(v === undefined ? {} : v, 200); }
       }
       return json({ detail: 'Not Found' }, 404);
     } catch (e) {
-      uloz();
+      uloz(metoda);
       if (e instanceof Chyba) return json({ detail: e.detail }, e.status);
       console.error(e);
       return json({ detail: 'Chyba dema: ' + (e && e.message) }, 500);
@@ -995,19 +1060,28 @@
   function lista() {
     const el = document.createElement('div');
     el.id = 'demo-lista';
-    el.innerHTML = `<strong>DEMO</strong> · PIN šéf <b>1234</b>, prodavač <b>1111</b> · data jen v tomto prohlížeči ·
-      <a href="vzorova_faktura.isdoc" download>vzorová faktura</a> · <a href="#" id="demo-reset">začít znovu</a> <button id="demo-skryt" title="Skrýt">×</button>`;
+    el.innerHTML = `<strong>DEMO</strong> · PIN šéf <b>1234</b>, prodavač <b>1111</b> · ${DB.zdroj
+      ? `<b>skutečný sklad ${DB.zdroj.prodejna}</b> · jen v tomto prohlížeči · <a href="#" id="demo-reset">zpět na ukázková data</a>`
+      : `data jen v tomto prohlížeči · <a href="vzorova_faktura.isdoc" download>vzorová faktura</a> · <a href="#" id="demo-sklad">🔒 skutečný sklad Varnsdorf</a> · <a href="#" id="demo-reset">začít znovu</a>`}
+      <button id="demo-skryt" title="Skrýt">×</button>`;
     el.style.cssText = 'position:fixed;left:12px;bottom:12px;z-index:70;background:#1d1d1f;color:#fff;padding:8px 12px;border-radius:10px;font-size:13px;box-shadow:0 4px 16px rgba(0,0,0,.2);max-width:calc(100vw - 24px)';
     el.querySelectorAll('a').forEach((a) => { a.style.color = '#ffd9d6'; });
     const b = el.querySelector('#demo-skryt'); b.style.cssText = 'background:none;border:0;color:#aaa;font-size:16px;cursor:pointer;margin-left:6px';
     b.onclick = () => el.remove();
-    el.querySelector('#demo-reset').onclick = (e) => {
+    el.querySelector('#demo-reset').onclick = async (e) => {
       e.preventDefault();
-      if (confirm('Smazat všechny změny v demu a začít znovu?')) {
+      if (DB.zdroj) {
+        if (!confirm('Zavřít skutečný sklad a vrátit ukázková data? Sklad z tohoto prohlížeče zmizí, příště bude potřeba znovu heslo.')) return;
+        await idb('clear').catch(() => {});
+        [REZIM_KLIC, 'pokladna.kosik', 'pokladna.prijem'].forEach((k) => localStorage.removeItem(k));
+      } else {
+        if (!confirm('Smazat všechny změny v demu a začít znovu?')) return;
         ['pokladna.demo.db', 'pokladna.kosik', 'pokladna.prijem'].forEach((k) => localStorage.removeItem(k));
-        location.hash = ''; location.reload();
       }
+      location.hash = ''; location.reload();
     };
+    const sk = el.querySelector('#demo-sklad');
+    if (sk) sk.onclick = (e) => { e.preventDefault(); odemknoutSklad(); };
     document.body.appendChild(el);
   }
   // Odkazy na stažení souborů ze serveru (faktury, zálohy) v demu nejsou.
@@ -1015,5 +1089,37 @@
     const a = e.target.closest && e.target.closest('a[href^="/api/"]');
     if (a) { e.preventDefault(); alert('V demu se soubory nestahují.'); }
   }, true);
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', lista); else lista();
+  function odemknoutSklad() {
+    const z = document.createElement('div');
+    z.className = 'zavoj'; z.style.zIndex = 90;
+    z.innerHTML = `<form class="okno" style="max-width:420px" autocomplete="on"><div class="hlav"><h2>Skutečný sklad Varnsdorf</h2></div>
+      <div class="telo"><p class="mut" style="margin-top:0">Katalog a stav skladu z Trellu jsou na GitHubu zašifrované. Po zadání hesla se rozšifrují
+        jen v tomto prohlížeči a místo ukázkových dat uvidíte celý sklad (13 639 karet). Nikam se nic neposílá.</p>
+        <input type="text" name="username" value="sklad-varnsdorf" autocomplete="username" hidden>
+        <input type="password" id="demo-heslo" placeholder="Heslo" autocomplete="current-password" required>
+        <div class="chyba-text" id="demo-chyba"></div></div>
+      <div class="pata"><button type="button" class="btn" data-zpet>Zpět</button><button type="submit" class="btn hl">Odemknout</button></div></form>`;
+    const f = z.querySelector('form'); const tl = f.querySelector('[type=submit]');
+    const zavri = () => z.remove();
+    z.querySelector('[data-zpet]').onclick = zavri;
+    z.addEventListener('keydown', (e) => { if (e.key === 'Escape') zavri(); });
+    f.onsubmit = async (e) => {
+      e.preventDefault();
+      tl.disabled = true; tl.textContent = 'Rozšifrovávám…'; z.querySelector('#demo-chyba').textContent = '';
+      try {
+        const s = await rozsifrujSklad(z.querySelector('#demo-heslo').value);
+        await idb('put', novaDb(s));
+        localStorage.setItem(REZIM_KLIC, 'sklad');
+        ['pokladna.kosik', 'pokladna.prijem'].forEach((k) => localStorage.removeItem(k));
+        location.hash = '#sklad/stav'; location.reload();
+      } catch (er) {
+        z.querySelector('#demo-chyba').textContent = er.message || String(er);
+        tl.disabled = false; tl.textContent = 'Odemknout';
+      }
+    };
+    document.body.appendChild(z);
+    z.querySelector('#demo-heslo').focus();
+  }
+  const start = () => pripraveno.then(lista);
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
 })();
