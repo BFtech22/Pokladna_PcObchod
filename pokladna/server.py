@@ -251,7 +251,42 @@ def detail_zbozi(zid: int, u=Depends(uzivatel), con: sqlite3.Connection = Depend
     d["pohyby"] = [dict(x) for x in con.execute(
         "SELECT p.*, u.jmeno AS uzivatel FROM pohyby p LEFT JOIN uzivatele u ON u.id = p.uzivatel_id "
         "WHERE zbozi_id = ? ORDER BY p.id DESC LIMIT 100", (zid,))]
+    d.update(_historie_zbozi(con, zid))
     return d
+
+
+def _historie_zbozi(con: sqlite3.Connection, zid: int) -> dict:
+    """Nákupy (příjemky od dodavatelů) a prodeje (účtenky a faktury) jednoho zboží pro kartu zboží."""
+    nakupy = [dict(x) for x in con.execute(
+        "SELECT pr.id AS prijemka_id, pr.cislo, pr.cas, pr.dodavatel, pr.dodavatel_ico, pr.doklad, pr.soubor_id, pr.stornovano, "
+        "pp.mnozstvi, pp.nakupni_cena, u.jmeno AS uzivatel FROM prijemka_polozky pp JOIN prijemky pr ON pr.id = pp.prijemka_id "
+        "LEFT JOIN uzivatele u ON u.id = pr.uzivatel_id WHERE pp.zbozi_id = ? ORDER BY pr.cas DESC, pr.id DESC LIMIT 200", (zid,))]
+    platne = [n for n in nakupy if not n["stornovano"] and n["nakupni_cena"] is not None and n["mnozstvi"] > 0]
+    kusu = sum(n["mnozstvi"] for n in platne)
+    souhrn = {
+        "pocet": len(platne), "kusu": kusu,
+        "posledni": platne[0] if platne else None,
+        "prumer": int(round(sum(n["nakupni_cena"] * n["mnozstvi"] for n in platne) / kusu)) if kusu else None,
+        "min": min((n["nakupni_cena"] for n in platne), default=None),
+        "max": max((n["nakupni_cena"] for n in platne), default=None),
+        "dodavatelu": len({(n["dodavatel_ico"] or n["dodavatel"] or "").strip().lower() for n in platne}),
+    }
+    prodeje = [dict(x) for x in con.execute(
+        "SELECT * FROM ("
+        " SELECT 'UCTENKA' AS zdroj, p.id, p.cislo, p.cas, p.typ, p.stornovano, pp.mnozstvi, pp.cena, pp.celkem, NULL AS odberatel "
+        " FROM prodej_polozky pp JOIN prodeje p ON p.id = pp.prodej_id WHERE pp.zbozi_id = ?"
+        " UNION ALL"
+        " SELECT 'FAKTURA', f.id, f.cislo, f.datum_vystaveni || 'T12:00:00', f.typ, f.stav = 'STORNO', fp.mnozstvi, fp.cena, fp.celkem, f.odb_nazev"
+        " FROM faktura_vydana_polozky fp JOIN faktury_vydane f ON f.id = fp.faktura_id"
+        " WHERE fp.zbozi_id = ? AND f.typ IN ('FAKTURA', 'OPRAVNY') AND f.prodej_id IS NULL"
+        ") ORDER BY cas DESC LIMIT 100", (zid, zid))]
+    rok = (date.today() - timedelta(days=365)).isoformat()
+    mesic = (date.today() - timedelta(days=30)).isoformat()
+    def prodano(od: str) -> float:
+        return sum(x["mnozstvi"] for x in prodeje if x["cas"] >= od and not x["stornovano"] and x["typ"] != "STORNO")
+    return {"nakupy": nakupy, "nakupy_souhrn": souhrn, "prodeje": prodeje,
+            "prodano_30": prodano(mesic), "prodano_365": prodano(rok),
+            "posledni_prodej": next((x["cas"] for x in prodeje if x["typ"] != "STORNO" and x["mnozstvi"] > 0), None)}
 
 
 @app.post("/api/zbozi")

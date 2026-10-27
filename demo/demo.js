@@ -9,7 +9,7 @@
 
   const KLIC = 'pokladna.demo.db';
   const REZIM_KLIC = 'pokladna.demo.rezim';   // 'sklad' = skutečný sklad z Trellu (v IndexedDB, do localStorage se nevejde)
-  const VERZE = 5;
+  const VERZE = 6;
   window.POKLADNA_DEMO = true;
 
   const ZBOZI = [
@@ -80,12 +80,17 @@
     Object.assign(db.dalsi, { pokl: 1, poc: 1, serie: 1, servis: 1, spol: 1, shist: 1 });
     db.dalsi.odberatel = 1; db.dalsi.faktura = 1; db.dalsi.fpol = 1;
     if (sklad) naplnSklad(db, sklad);
-    else for (const [nazev, ean, kat, cena, nakup, stav, jed] of ZBOZI) {
-      const id = db.dalsi.zbozi++;
-      db.zbozi.push({ id, nazev, kod: null, kategorie: kat, cena: cena * 100, sazba_dph: 21, nakupni_cena: nakup * 100, jednotka: jed,
-        stav: 0, min_stav: jed === 'ks' ? 2 : 20, aktivni: 1, poznamka: null, vytvoreno: ted(), upraveno: ted(), seriova_cisla: kat === 'Telefony' ? 1 : 0, zaruka_mesice: 24 });
-      db.eany[ean] = id;
-      pohyb(db, id, stav, 'KOREKCE', 'demo', null, 'ukázková data');
+    else {
+      for (const [nazev, ean, kat, cena, nakup, , jed] of ZBOZI) {
+        const id = db.dalsi.zbozi++;
+        db.zbozi.push({ id, nazev, kod: null, kategorie: kat, cena: cena * 100, sazba_dph: 21, nakupni_cena: nakup * 100, jednotka: jed,
+          stav: 0, min_stav: jed === 'ks' ? 2 : 20, aktivni: 1, poznamka: null, vytvoreno: ted(), upraveno: ted(), seriova_cisla: kat === 'Telefony' ? 1 : 0, zaruka_mesice: 24 });
+        db.eany[ean] = id;
+      }
+      // Dva starší nákupy od dodavatelů, ať je na kartě zboží vidět historie nákupních cen. Zbytek stavu je inventura.
+      ukazkovaPrijemka(db, 45, 'Testovací Distribuce s.r.o.', '99999991', 'FV2026-0612', [[1, 10, 5800], [3, 5, 13900], [5, 20, 3200], [9, 3, 21000]]);
+      ukazkovaPrijemka(db, 14, 'Ukázkový velkoobchod s.r.o.', '99999992', '2026-1187', [[1, 10, 6200], [3, 4, 14500], [5, 10, 3500], [16, 4, 265000]]);
+      ZBOZI.forEach(([, , , , , stav], i) => { const z = db.zbozi[i]; if (stav - z.stav) pohyb(db, z.id, stav - z.stav, 'KOREKCE', 'demo', null, 'ukázková data'); });
     }
     // Dvě ukázkové účtenky, ať účtenky a uzávěrka nejsou prázdné.
     db.relace = 2;
@@ -158,6 +163,51 @@
     });
   }
   const skladovyRezim = () => { try { return localStorage.getItem(REZIM_KLIC) === 'sklad'; } catch { return false; } };
+
+  function ukazkovaPrijemka(db, predDny, dodavatel, ico, doklad, radky) {
+    const d = new Date(); d.setDate(d.getDate() - predDny); d.setHours(10, 15, 0, 0);
+    const cas = ted().replace(/^.{19}/, `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}T10:15:00`);
+    const cislo = `P${cas.slice(0, 4)}-${String(dalsiCislo(db, 'prijemka-' + cas.slice(0, 4))).padStart(5, '0')}`;
+    const id = db.dalsi.prijemka++;
+    db.prijemky.push({ id, cislo, cas, uzivatel_id: 1, dodavatel, dodavatel_ico: ico, doklad, poznamka: null, soubor_id: null, stornovano: 0,
+      celkem_bez_dph: radky.reduce((s, [, q, c]) => s + q * c, 0) });
+    for (const [zid, q, c] of radky) {
+      const z = db.zbozi.find((x) => x.id === zid);
+      db.prijemka_polozky.push({ prijemka_id: id, zbozi_id: zid, mnozstvi: q, nakupni_cena: c });
+      z.stav += q;
+      db.pohyby.push({ id: db.dalsi.pohyb++, cas, zbozi_id: zid, mnozstvi: q, typ: 'PRIJEM', doklad: cislo, uzivatel_id: 1, poznamka: doklad, stav_po: z.stav });
+    }
+  }
+
+  // Historie zboží pro kartu zboží (stejně jako _historie_zbozi v server.py).
+  function historieDemo(z) {
+    const jmeno = (uid) => (DB.uzivatele.find((u) => u.id === uid) || {}).jmeno || null;
+    const nakupy = DB.prijemka_polozky.filter((x) => x.zbozi_id === z.id).map((x) => {
+      const pr = DB.prijemky.find((y) => y.id === x.prijemka_id) || {};
+      return { prijemka_id: pr.id, cislo: pr.cislo, cas: pr.cas, dodavatel: pr.dodavatel, dodavatel_ico: pr.dodavatel_ico, doklad: pr.doklad, soubor_id: null,
+        stornovano: pr.stornovano || 0, mnozstvi: x.mnozstvi, nakupni_cena: x.nakupni_cena, uzivatel: jmeno(pr.uzivatel_id) };
+    }).sort((a, b) => b.cas.localeCompare(a.cas) || b.prijemka_id - a.prijemka_id).slice(0, 200);
+    const platne = nakupy.filter((n) => !n.stornovano && n.nakupni_cena != null && n.mnozstvi > 0);
+    const kusu = platne.reduce((s, n) => s + n.mnozstvi, 0);
+    const ceny = platne.map((n) => n.nakupni_cena);
+    const souhrn = { pocet: platne.length, kusu, posledni: platne[0] || null,
+      prumer: kusu ? Math.round(platne.reduce((s, n) => s + n.nakupni_cena * n.mnozstvi, 0) / kusu) : null,
+      min: ceny.length ? Math.min(...ceny) : null, max: ceny.length ? Math.max(...ceny) : null,
+      dodavatelu: new Set(platne.map((n) => (n.dodavatel_ico || n.dodavatel || '').trim().toLowerCase())).size };
+    const uctenky = DB.polozky.filter((x) => x.zbozi_id === z.id).map((x) => {
+      const p = DB.prodeje.find((y) => y.id === x.prodej_id);
+      return { zdroj: 'UCTENKA', id: p.id, cislo: p.cislo, cas: p.cas, typ: p.typ, stornovano: p.stornovano ? 1 : 0, mnozstvi: x.mnozstvi, cena: x.cena, celkem: x.celkem, odberatel: null };
+    });
+    const faktury = DB.faktura_polozky.filter((x) => x.zbozi_id === z.id).map((x) => [x, DB.faktury.find((f) => f.id === x.faktura_id)])
+      .filter(([, f]) => f && ['FAKTURA', 'OPRAVNY'].includes(f.typ) && !f.prodej_id)
+      .map(([x, f]) => ({ zdroj: 'FAKTURA', id: f.id, cislo: f.cislo, cas: f.datum_vystaveni + 'T12:00:00', typ: f.typ, stornovano: f.stav === 'STORNO' ? 1 : 0,
+        mnozstvi: x.mnozstvi, cena: x.cena, celkem: x.celkem, odberatel: f.odb_nazev }));
+    const prodeje = [...uctenky, ...faktury].sort((a, b) => b.cas.localeCompare(a.cas)).slice(0, 100);
+    const od = (dni) => { const d = new Date(); d.setDate(d.getDate() - dni); return d.toISOString().slice(0, 10); };
+    const prodano = (o) => prodeje.filter((x) => x.cas >= o && !x.stornovano && x.typ !== 'STORNO').reduce((s, x) => s + x.mnozstvi, 0);
+    return { nakupy, nakupy_souhrn: souhrn, prodeje, prodano_30: prodano(od(30)), prodano_365: prodano(od(365)),
+      posledni_prodej: (prodeje.find((x) => x.typ !== 'STORNO' && x.mnozstvi > 0) || {}).cas || null };
+  }
 
   let DB;
   let revEany = null;   // zboží → jeho EANy; počítá se jednou za požadavek (sklad z Trellu má přes 13 000 EANů)
@@ -553,7 +603,7 @@
       prihlasen(); const z = zbozi(+m[1]); if (!z) throw new Chyba(404, 'Zboží nenalezeno');
       const pohyby = DB.pohyby.filter((p) => p.zbozi_id === z.id).slice(-100).reverse()
         .map((p) => ({ ...p, uzivatel: (DB.uzivatele.find((u) => u.id === p.uzivatel_id) || {}).jmeno || null }));
-      return { ...zboziDict(z), pohyby };
+      return { ...zboziDict(z), pohyby, ...historieDemo(z) };
     }],
     ['POST', /^\/api\/zbozi$/, (m, q, b) => {
       const u = spravce();
@@ -1027,7 +1077,7 @@
   // až po definici všech pomocných funkcí (const nejsou hoistované); skutečný sklad se čte z IndexedDB asynchronně
   let pripraveno = Promise.resolve();
   if (skladovyRezim()) {
-    pripraveno = idb('get').then((d) => { DB = d && d.verze === VERZE && d.zdroj ? d : null; }, () => {}).then(() => {
+    pripraveno = idb('get').then((d) => { DB = d && d.zdroj && d.verze >= 5 ? Object.assign(d, { verze: VERZE }) : null; }, () => {}).then(() => {
       if (!DB) { try { localStorage.removeItem(REZIM_KLIC); } catch { /* nic */ } DB = nacti(); uloz(); }
     });
   } else { DB = nacti(); uloz(); }

@@ -111,6 +111,9 @@ table.tab th {
 }
 table.tab td { padding: 9px 10px; border-bottom: 1px solid var(--linka); vertical-align: middle; }
 table.tab tr.klik { cursor: pointer; }
+.odkaz { cursor: pointer; }
+.odkaz:hover { color: var(--brand-tmava); text-decoration: underline; }
+.naseptavac .pol .btn.ikona { flex: none; }
 table.tab tr.klik:hover td { background: #fafafb; }
 table.tab th.num, table.tab td.num { text-align: right; }
 .prazdno { padding: 36px 16px; text-align: center; color: var(--text-3); }
@@ -195,6 +198,9 @@ input.sken {
 .dlazdice { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; margin-bottom: 16px; }
 .dlazdice .karta { padding: 14px 16px; }
 .dlazdice .hod { font-size: 26px; font-weight: 800; font-variant-numeric: tabular-nums; margin-top: 4px; }
+.dlazdice.male { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.dlazdice.male .karta { padding: 12px 14px; }
+.dlazdice.male .hod { font-size: 21px; white-space: nowrap; }
 .dlazdice .pop { color: var(--text-2); font-size: 13px; font-weight: 600; }
 .zalozky { display: flex; gap: 4px; margin-bottom: 14px; border-bottom: 1px solid var(--linka); }
 .zalozky a { padding: 10px 14px; text-decoration: none; color: var(--text-2); font-weight: 600; border-bottom: 2px solid transparent; margin-bottom: -1px; }

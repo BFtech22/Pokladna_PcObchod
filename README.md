@@ -2,7 +2,7 @@
 
 Lokální pokladna se skladem a EET 2.0 pro prodejny PcObchod (Rumburk, Varnsdorf). Server běží v prodejně, obsluha je ve webovém prohlížeči z libovolného zařízení na síti prodejny. Každá prodejna má vlastní instalaci a databázi, protože jde o dvě firmy s vlastním EIČ a certifikátem.
 
-## Co umí (stav 26. 10. 2026)
+## Co umí (stav 27. 10. 2026)
 
 - **Prodej:** načtení čtečkou EAN (`3*kód` = 3 kusy), hledání podle názvu bez ohledu na diakritiku, změna ceny a sleva, položka mimo katalog, vratka, platba hotově se zaokrouhlením a výpočtem vrácení, platba kartou. Klávesy F2 (hotově), F3 (kartou) a F8 (zrušit).
 - **EET 2.0:** tržba se odesílá hned při prodeji (mezní doba odezvy, výchozí 3 s). Když to nejde, fronta na pozadí zkouší odeslání každých 30 s (zákonná lhůta je 48 h). Storno odešle zápornou tržbu. V hlavičce je ukazatel stavu EET.
@@ -25,6 +25,7 @@ Lokální pokladna se skladem a EET 2.0 pro prodejny PcObchod (Rumburk, Varnsdor
   - stavy od přijetí přes diagnostiku, čekání na díl nebo zákazníka a předání dodavateli (s číslem RMA) až po vyzvednutí, historie s poznámkami,
   - práce a díly ze skladu, záloha přes pokladnu (s EET), výdej s prodejkou, na fakturu nebo zdarma (díly výdejkou),
   - tisk: převzetí do servisu, potvrzení o uplatnění reklamace, potvrzení o vyřízení (s dobou vyřízení), štítek na zařízení s čárovým kódem; e-mail zákazníkovi.
+- **Karta zboží s historií:** v prodeji tlačítko „i“ v nabídce nebo F4 (bez nabídky karta naposledy přidaného zboží), klik na název v košíku, ve stavu skladu, v pohybech a v příjmu. Ukáže stav, prodejní cenu, poslední nákupní cenu s datem a dodavatelem, marži a prodeje za 30 dní a za rok. Záložky: **Nákupy** (kdy, od koho, číslo faktury dodavatele, příjemka, množství, nákupní cena bez DPH a s DPH; průměrná vážená, nejnižší a nejvyšší cena), **Prodeje** (účtenky a faktury) a **Pohyby** skladu.
 - **Sériová čísla / IMEI a záruka:** u zboží s evidencí se při prodeji načte číslo každého kusu; je na účtence, v záručním listu a dohledá se při reklamaci.
 - **Štítky a cenovky:** EAN-13, EAN-8 a Code 128 kreslené přímo v prohlížeči; štítky 50 × 30, 40 × 25 mm na tiskárnu štítků nebo arch A4 24 ks. Ze zboží, z příjemky (počet podle přijatého množství) i ze servisu. Interní EAN 29… pro zboží bez kódu.
 - **Návrh objednávky:** zboží na minimálním stavu podle dodavatelů z posledního příjmu, s prodejem za 30 a 90 dní; tisk, CSV a zkopírování seznamu.

@@ -263,7 +263,7 @@ function viewProdej() {
         <button class="btn" id="b-hotovost">Hotovost</button>
         <button class="btn nebezp" id="b-zrusit" style="grid-column:span 2">Zrušit <span class="klavesa">F8</span></button>
       </div>
-      <div class="mut2" style="text-align:center">Čtečka píše do pole nahoře. Šipky a Enter vybírají z nabídky.</div>
+      <div class="mut2" style="text-align:center">Čtečka píše do pole nahoře. Šipky a Enter vybírají z nabídky, F4 ukáže kartu zboží s historií nákupů.</div>
     </aside></div>`;
 
   const sken = $('#sken');
@@ -277,14 +277,17 @@ function viewProdej() {
     if (!vysledky.length) return zavriNasep();
     nasep.innerHTML = vysledky.map((z, i) => `<div class="pol ${i === vybrany ? 'vybrana' : ''}" data-i="${i}">
         <span class="n">${esc(z.nazev)}<div class="mut2">${esc(z.eany[0] || z.kod || '')}${z.kategorie ? ' · ' + esc(z.kategorie) : ''}</div></span>
-        <span class="mut2">skladem ${mn(z.stav)} ${esc(z.jednotka)}</span><strong class="num">${kc(z.cena)}</strong></div>`).join('');
+        <span class="mut2">skladem ${mn(z.stav)} ${esc(z.jednotka)}</span><strong class="num">${kc(z.cena)}</strong>
+        <button class="btn ikona" data-karta="${i}" title="Karta zboží a historie nákupů (F4)">i</button></div>`).join('');
     nasep.classList.remove('skryt');
-    $$('.pol', nasep).forEach((p) => { p.onmousedown = (e) => { e.preventDefault(); vyber(vysledky[+p.dataset.i]); }; });
+    $$('.pol', nasep).forEach((p) => { p.onmousedown = (e) => { e.preventDefault(); if (e.target.closest('[data-karta]')) return; vyber(vysledky[+p.dataset.i]); }; });
+    $$('[data-karta]', nasep).forEach((b) => { b.onmousedown = (e) => { e.preventDefault(); e.stopPropagation(); otevriKartu(vysledky[+b.dataset.karta]); }; });
   };
   const hledej = async (q) => {
     try { vysledky = await api('GET', '/api/zbozi?limit=15&q=' + encodeURIComponent(q)); vybrany = vysledky.length ? 0 : -1; ukazNasep(); } catch (e) { chyba(e); }
   };
   const rozeberVstup = (v = sken.value) => rozeberSken(v);
+  const otevriKartu = (z) => { zavriNasep(); kartaZbozi(z.id, { doKosiku: (x) => { pridejDoKosiku(x, rozeberVstup().mnozstvi); sken.value = ''; fokusSken(); } }); };
   const vyber = (z) => {
     const { mnozstvi } = rozeberVstup();
     pridejDoKosiku(z, mnozstvi);
@@ -314,6 +317,7 @@ function viewProdej() {
     if (e.key === 'ArrowDown' && vysledky.length) { e.preventDefault(); vybrany = (vybrany + 1) % vysledky.length; ukazNasep(); return; }
     if (e.key === 'ArrowUp' && vysledky.length) { e.preventDefault(); vybrany = (vybrany - 1 + vysledky.length) % vysledky.length; ukazNasep(); return; }
     if (e.key === 'Escape') { zavriNasep(); sken.value = ''; return; }
+    if (e.key === 'F4' && vybrany >= 0 && vysledky[vybrany] && !nasep.classList.contains('skryt')) { e.preventDefault(); e.stopPropagation(); otevriKartu(vysledky[vybrany]); return; }
     if (e.key !== 'Enter') return;
     e.preventDefault();
     clearTimeout(casovac);
@@ -352,6 +356,11 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'F2') { e.preventDefault(); zaplat('HOTOVE'); }
   if (e.key === 'F3') { e.preventDefault(); zaplat('KARTA'); }
   if (e.key === 'F8') { e.preventDefault(); $('#b-zrusit').click(); }
+  if (e.key === 'F4') {   // bez nabídky: karta naposledy přidaného zboží v košíku
+    e.preventDefault();
+    const r = [...S.kosik].reverse().find((x) => x.zbozi_id);
+    if (r) kartaZbozi(r.zbozi_id); else toast('V košíku není zboží z katalogu');
+  }
 });
 
 // Čtečka píše jako klávesnice. Na české klávesnici z „8595…“ udělá „áříř…“ – číselnou řadu převedeme zpět.
@@ -404,7 +413,7 @@ function vykresliKosik() {
   const telo = $('#kosik-telo');
   if (!telo) return;
   telo.innerHTML = S.kosik.map((r) => `<tr data-k="${r.klic}" class="${r.mnozstvi < 0 ? 'zaporna' : ''} ${r.nova ? 'nova' : ''}">
-      <td><div class="nazev">${esc(r.nazev)}</div><div class="mut2">${esc(r.ean || (r.zbozi_id ? '' : 'mimo katalog'))}${r.mnozstvi < 0 ? ' · <strong style="color:var(--varovani)">vratka</strong>' : ''}</div>
+      <td><div class="nazev ${r.zbozi_id ? 'odkaz' : ''}" ${r.zbozi_id ? 'data-a="karta" title="Karta zboží a historie nákupů"' : ''}>${esc(r.nazev)}</div><div class="mut2">${esc(r.ean || (r.zbozi_id ? '' : 'mimo katalog'))}${r.mnozstvi < 0 ? ' · <strong style="color:var(--varovani)">vratka</strong>' : ''}</div>
         ${r.serie ? `<div class="mut2 mono">IMEI / SN: ${r.serie.map(esc).join(', ')}</div>` : ''}</td>
       <td style="text-align:center"><span class="mnoz"><button class="btn ikona" data-a="minus">−</button><input type="text" inputmode="decimal" value="${mn(r.mnozstvi)}" data-a="mn" ${r.serie ? 'disabled' : ''}><button class="btn ikona" data-a="plus">+</button></span></td>
       <td class="num"><span class="cena-klik ${r.cena !== r.katalog && r.zbozi_id ? 'cena-zmenena' : ''}" data-a="cena" title="Změnit cenu">${kc(r.cena)}</span></td>
@@ -437,6 +446,7 @@ function vykresliKosik() {
     inp.onkeydown = (e) => { if (e.key === 'Enter') { inp.blur(); fokusSken(); } };
     tr.querySelector('[data-a=smaz]').onclick = () => { S.kosik.splice(S.kosik.indexOf(r), 1); ulozKosik(); };
     tr.querySelector('[data-a=cena]').onclick = () => zmenCenu(r);
+    const kb = tr.querySelector('[data-a=karta]'); if (kb) kb.onclick = () => kartaZbozi(r.zbozi_id);
   });
 }
 
@@ -750,12 +760,12 @@ async function formularZbozi(id, predvyplnit, poUlozeni) {
       <label class="zatrh" style="align-self:end;min-height:40px" title="Telefony, notebooky, tablety: při prodeji se načte IMEI / sériové číslo a dohledá se při reklamaci"><input type="checkbox" name="seriova_cisla" ${z.seriova_cisla ? 'checked' : ''} ${dis}> Při prodeji načítat IMEI / sériové číslo</label>
       <label class="pole siroke">Poznámka<textarea name="poznamka" ${dis}>${esc(z.poznamka || '')}</textarea></label>
       <datalist id="kategorie-dl"></datalist></form>
-      ${id && z.pohyby.length ? `<h3 style="margin:18px 0 8px;font-size:15px">Pohyby na skladě</h3><div style="max-height:260px;overflow:auto"><table class="tab"><thead><tr><th>Kdy</th><th>Typ</th><th>Doklad</th><th class="num">Změna</th><th class="num">Stav po</th><th>Kdo</th></tr></thead><tbody>
-        ${z.pohyby.map((p) => `<tr><td>${datumCas(p.cas)}</td><td>${esc(p.typ.toLowerCase())}</td><td class="mono">${esc(p.doklad || '')}${p.poznamka ? ` <span class="mut2">${esc(p.poznamka)}</span>` : ''}</td><td class="num" style="color:${p.mnozstvi < 0 ? 'var(--chyba)' : 'var(--ok)'}">${p.mnozstvi > 0 ? '+' : ''}${mn(p.mnozstvi)}</td><td class="num">${mn(p.stav_po)}</td><td>${esc(p.uzivatel || '')}</td></tr>`).join('')}</tbody></table></div>` : ''}`,
+      ${id ? historieZbozi(z) : ''}`,
     pata: `${id ? `<button class="btn" data-stitek>Štítek</button>${lze && !z.eany.length ? '<button class="btn" data-iean title="Vygeneruje interní EAN 29…">Interní EAN</button>' : ''}<span class="vypln"></span>` : ''}
       ${lze ? '<button class="btn" data-zpet>Zpět</button><button class="btn hl" data-ulozit>Uložit</button>' : '<button class="btn hl" data-zpet>Zavřít</button>'}`,
   });
   const f = $('#fz', o.el);
+  napojHistorii(o.el);
   const stb = $('[data-stitek]', o.el); if (stb) stb.onclick = () => dialogStitky([z]);
   const ieb = $('[data-iean]', o.el);
   if (ieb) ieb.onclick = async () => {
@@ -796,6 +806,80 @@ async function formularZbozi(id, predvyplnit, poUlozeni) {
   };
   ul.onclick = uloz;
   f.onsubmit = (e) => { e.preventDefault(); uloz(); };
+}
+
+// Historie zboží na kartě: nákupy od dodavatelů, prodeje a pohyby skladu (záložky).
+function historieZbozi(z) {
+  const ns = z.nakupy_souhrn || { pocet: 0 };
+  const nakupy = z.nakupy || []; const prodeje = z.prodeje || []; const pohyby = z.pohyby || [];
+  const zal = [['nakupy', `Nákupy (${nakupy.length})`], ['prodeje', `Prodeje (${prodeje.length})`], ['pohyby', `Pohyby (${pohyby.length})`]];
+  const tabNakupy = nakupy.length ? `
+    <p class="mut2" style="margin:0 0 8px">${tvar(ns.pocet, 'nákup', 'nákupy', 'nákupů')}${ns.dodavatelu > 1 ? ` od ${ns.dodavatelu} dodavatelů` : ''} · ${mn(ns.kusu)} ${esc(z.jednotka)}
+      ${ns.prumer != null ? ` · průměrná nákupní cena <strong>${kc(ns.prumer)}</strong>` : ''}${ns.min != null && ns.min !== ns.max ? ` · nejlevněji ${kc(ns.min)}, nejdráž ${kc(ns.max)}` : ''} (bez DPH)</p>
+    <table class="tab"><thead><tr><th>Kdy</th><th>Dodavatel</th><th>Faktura</th><th>Příjemka</th><th class="num">Množství</th><th class="num">Nákup/ks bez DPH</th><th class="num">s DPH</th><th class="num">Celkem bez DPH</th></tr></thead><tbody>
+    ${nakupy.map((n) => `<tr style="${n.stornovano ? 'opacity:.5;text-decoration:line-through' : ''}"><td style="white-space:nowrap">${datumCz(n.cas)}</td><td>${esc(n.dodavatel || '')}${n.dodavatel_ico ? `<div class="mut2">IČO ${esc(n.dodavatel_ico)}</div>` : ''}</td>
+      <td class="mono">${esc(n.doklad || '')}</td><td class="mono"><span class="odkaz" data-prijemka="${n.prijemka_id}">${esc(n.cislo)}</span>${n.stornovano ? ' <span class="stitek sedy">storno</span>' : ''}</td>
+      <td class="num">${mn(n.mnozstvi)}</td><td class="num"><strong>${kc(n.nakupni_cena)}</strong></td><td class="num">${n.nakupni_cena != null ? kc(Math.round(n.nakupni_cena * (1 + z.sazba_dph / 100))) : ''}</td>
+      <td class="num">${n.nakupni_cena != null ? kc(Math.round(n.nakupni_cena * n.mnozstvi)) : ''}</td></tr>`).join('')}</tbody></table>`
+    : `<div class="prazdno">Zatím žádný nákup. Historie se začne plnit s každým příjmem zboží (z faktury nebo ručně ve Skladu → Příjem zboží).</div>`;
+  const tabProdeje = prodeje.length ? `<table class="tab"><thead><tr><th>Kdy</th><th>Doklad</th><th>Odběratel</th><th class="num">Množství</th><th class="num">Cena/ks s DPH</th><th class="num">Celkem</th></tr></thead><tbody>
+    ${prodeje.map((x) => `<tr style="${x.stornovano ? 'opacity:.5' : ''}"><td>${datumCas(x.cas)}</td>
+      <td class="mono"><span class="odkaz" data-${x.zdroj === 'FAKTURA' ? 'faktura' : 'uctenka'}="${x.id}">${esc(x.cislo)}</span> ${x.zdroj === 'FAKTURA' ? '<span class="stitek info">faktura</span>' : ''}${x.typ === 'STORNO' || x.stornovano ? ' <span class="stitek sedy">storno</span>' : ''}</td>
+      <td>${esc(x.odberatel || '')}</td><td class="num" style="${x.mnozstvi < 0 ? 'color:var(--chyba)' : ''}">${mn(x.mnozstvi)}</td><td class="num">${kc(x.cena)}</td><td class="num">${kc(x.celkem)}</td></tr>`).join('')}</tbody></table>`
+    : '<div class="prazdno">Zatím se neprodalo.</div>';
+  const tabPohyby = pohyby.length ? `<table class="tab"><thead><tr><th>Kdy</th><th>Typ</th><th>Doklad</th><th class="num">Změna</th><th class="num">Stav po</th><th>Kdo</th></tr></thead><tbody>
+    ${pohyby.map((p) => { const [t, n] = TYPY_POHYBU[p.typ] || ['sedy', p.typ]; return `<tr><td>${datumCas(p.cas)}</td><td><span class="stitek ${t}">${n}</span></td><td class="mono">${esc(p.doklad || '')}${p.poznamka ? ` <span class="mut2">${esc(p.poznamka)}</span>` : ''}</td>
+      <td class="num" style="color:${p.mnozstvi < 0 ? 'var(--chyba)' : 'var(--ok)'};font-weight:700">${p.mnozstvi > 0 ? '+' : ''}${mn(p.mnozstvi)}</td><td class="num">${mn(p.stav_po)}</td><td>${esc(p.uzivatel || '')}</td></tr>`; }).join('')}</tbody></table>`
+    : '<div class="prazdno">Žádné pohyby</div>';
+  return `<div class="historie" style="margin-top:16px"><div class="zalozky">${zal.map(([k, t], i) => `<a href="#" data-hz="${k}" class="${i ? '' : 'aktivni'}">${t}</a>`).join('')}</div>
+    <div data-hp="nakupy" style="max-height:340px;overflow:auto">${tabNakupy}</div><div data-hp="prodeje" class="skryt" style="max-height:340px;overflow:auto">${tabProdeje}</div>
+    <div data-hp="pohyby" class="skryt" style="max-height:340px;overflow:auto">${tabPohyby}</div></div>`;
+}
+
+function napojHistorii(el, zavri) {
+  $$('[data-hz]', el).forEach((a) => {
+    a.onclick = (e) => {
+      e.preventDefault();
+      $$('[data-hz]', el).forEach((b) => b.classList.toggle('aktivni', b === a));
+      $$('[data-hp]', el).forEach((d) => d.classList.toggle('skryt', d.dataset.hp !== a.dataset.hz));
+    };
+  });
+  $$('[data-prijemka]', el).forEach((a) => { a.onclick = () => detailSkladDokladu('PRIJEMKA', +a.dataset.prijemka); });
+  $$('[data-uctenka]', el).forEach((a) => { a.onclick = () => detailUctenky(+a.dataset.uctenka); });
+  $$('[data-faktura]', el).forEach((a) => { a.onclick = () => detailFaktury(+a.dataset.faktura); });
+}
+
+// Karta zboží jen ke čtení (z prodeje, skladu, příjmu): co to je, kolik je skladem, za kolik a kdy jsme nakupovali.
+async function kartaZbozi(id, { doKosiku, poZmene } = {}) {
+  let z;
+  try { z = await api('GET', '/api/zbozi/' + id); } catch (e) { return chyba(e); }
+  const ns = z.nakupy_souhrn || {}; const posl = ns.posledni;
+  const bezDph = Math.round(z.cena / (1 + z.sazba_dph / 100));
+  const nakup = posl ? posl.nakupni_cena : z.nakupni_cena;
+  const info = [z.kategorie, z.eany.join(', '), z.kod ? 'kód ' + z.kod : '', z.seriova_cisla ? 'eviduje IMEI / SN' : '', z.aktivni ? '' : 'neaktivní'].filter(Boolean);
+  const o = okno({
+    titul: z.nazev, siroke: true,
+    obsah: `<div class="mut2 mono" style="margin:-4px 0 12px">${info.map(esc).join(' · ')}</div>
+      <div class="dlazdice male">
+        <div class="karta"><div class="pop">Skladem</div><div class="hod" style="${z.stav <= 0 || (z.min_stav > 0 && z.stav <= z.min_stav) ? 'color:var(--chyba)' : ''}">${mn(z.stav)} <small class="mut2">${esc(z.jednotka)}</small></div>${z.min_stav ? `<div class="mut2">minimum ${mn(z.min_stav)}</div>` : ''}</div>
+        <div class="karta"><div class="pop">Prodejní cena</div><div class="hod">${kc(z.cena)}</div><div class="mut2">bez DPH ${kc(bezDph)} · ${z.sazba_dph} %</div></div>
+        <div class="karta"><div class="pop">Poslední nákup bez DPH</div><div class="hod">${nakup != null ? kc(nakup) : '—'}</div>
+          <div class="mut2">${posl ? `${datumCz(posl.cas)} · ${esc(posl.dodavatel || 'bez dodavatele')}` : nakup != null ? 'zadáno na kartě' : 'zatím žádný příjem'}</div></div>
+        <div class="karta"><div class="pop">Marže</div><div class="hod">${nakup ? `${Math.round((bezDph - nakup) / nakup * 100)} %` : '—'}</div><div class="mut2">${nakup ? `${kc(bezDph - nakup)} na ${esc(z.jednotka)}` : 'chybí nákupní cena'}</div></div>
+        <div class="karta"><div class="pop">Prodáno za 30 dní</div><div class="hod">${mn(z.prodano_30 || 0)}</div><div class="mut2">za rok ${mn(z.prodano_365 || 0)}${z.posledni_prodej ? ` · naposledy ${datumCz(z.posledni_prodej)}` : ''}</div></div>
+      </div>
+      ${z.poznamka ? `<div class="upozorneni" style="margin-bottom:0">${esc(z.poznamka)}</div>` : ''}
+      ${historieZbozi(z)}`,
+    pata: `<button class="btn" data-stitek>Štítek</button><span class="vypln"></span>
+      ${doKosiku ? `<button class="btn" data-kosik ${z.aktivni ? '' : 'disabled'}>Do košíku</button>` : ''}
+      ${spravce() ? '<button class="btn" data-upravit>Upravit kartu</button>' : ''}<button class="btn hl" data-zpet>Zavřít</button>`,
+  });
+  napojHistorii(o.el);
+  $('[data-stitek]', o.el).onclick = () => dialogStitky([z]);
+  $('[data-zpet]', o.el).onclick = () => o.zavri();
+  const k = $('[data-kosik]', o.el); if (k) k.onclick = () => { o.zavri(); doKosiku(z); };
+  const u = $('[data-upravit]', o.el); if (u) u.onclick = () => { o.zavri(); formularZbozi(id, null, poZmene); };
+  $('[data-zpet]', o.el).focus();
 }
 
 /* ======================================================================== sklad */
@@ -839,13 +923,14 @@ function skladStav() {
       skladFiltr = $('#s-filtr').value; skladRazeni = $('#s-razeni').value;
       const rows = await api('GET', `/api/zbozi?limit=1000&filtr=${skladFiltr}&razeni=${skladRazeni}&q=${encodeURIComponent($('#s-q').value.trim())}`);
       $('#s-seznam').innerHTML = rows.length ? `<table class="tab"><thead><tr><th>Zboží</th><th>EAN / kód</th><th class="num">Skladem</th><th class="num">Minimum</th><th class="num">Prodejní cena</th><th class="num">Nákup bez DPH</th><th class="num">Hodnota (prodej)</th>${spravce() ? '<th></th>' : ''}</tr></thead><tbody>
-        ${rows.map((z) => `<tr><td><strong>${esc(z.nazev)}</strong>${z.kategorie ? `<div class="mut2">${esc(z.kategorie)}</div>` : ''}</td><td class="mono">${esc(z.eany[0] || z.kod || '')}</td>
+        ${rows.map((z) => `<tr><td><strong class="odkaz" data-karta="${z.id}">${esc(z.nazev)}</strong>${z.kategorie ? `<div class="mut2">${esc(z.kategorie)}</div>` : ''}</td><td class="mono">${esc(z.eany[0] || z.kod || '')}</td>
           <td class="num" style="${z.stav < 0 || (z.min_stav > 0 && z.stav <= z.min_stav) ? 'color:var(--chyba);font-weight:700' : ''}">${mn(z.stav)} ${esc(z.jednotka)}</td><td class="num">${z.min_stav ? mn(z.min_stav) : ''}</td>
           <td class="num">${kc(z.cena)}</td><td class="num">${z.nakupni_cena != null ? kc(z.nakupni_cena) : '<span class="mut2">—</span>'}</td><td class="num">${z.stav > 0 ? kc(Math.round(z.stav * z.cena)) : ''}</td>
           ${spravce() ? `<td style="text-align:right"><button class="btn mala" data-inv="${z.id}">Inventura</button></td>` : ''}</tr>`).join('')}</tbody></table>
         <div class="telo mut">${rows.length === 1000 ? 'Zobrazeno prvních 1 000 položek – upřesněte hledání nebo filtr.' : `${tvar(rows.length, 'položka', 'položky', 'položek')}`}</div>`
         : `<div class="prazdno">${skladFiltr === 'skladem' && !$('#s-q').value.trim() ? 'Na skladě zatím nic není. Zboží naskladníte příjmem, z faktury nebo importem z Trellu (Nastavení).' : 'Nic nenalezeno'}</div>`;
       $$('[data-inv]').forEach((b) => { b.onclick = () => inventura(rows.find((z) => z.id === +b.dataset.inv), () => { souhrn(); nacti(); }); });
+      $$('#s-seznam [data-karta]').forEach((b) => { b.onclick = () => kartaZbozi(+b.dataset.karta, { poZmene: () => { souhrn(); nacti(); } }); });
     } catch (e) { chyba(e); }
   };
   $('#s-q').oninput = () => { clearTimeout(casovac); casovac = setTimeout(nacti, 200); };
@@ -887,7 +972,7 @@ function skladPrijem() {
   const uloz = () => ulozLokalne('prijem', S.prijem);
   ['dod', 'dok', 'pozn'].forEach((k, i) => { $('#p-' + k).oninput = (e) => { P[['dodavatel', 'doklad', 'poznamka'][i]] = e.target.value; uloz(); }; });
   const vykresli = () => {
-    $('#p-telo').innerHTML = P.polozky.map((r, i) => `<tr data-i="${i}"><td><strong>${esc(r.nazev)}</strong><div class="mut2">${esc(r.ean || '')} · skladem ${mn(r.stav)}</div></td>
+    $('#p-telo').innerHTML = P.polozky.map((r, i) => `<tr data-i="${i}"><td><strong class="odkaz" data-a="karta" title="Karta zboží a historie nákupů">${esc(r.nazev)}</strong><div class="mut2">${esc(r.ean || '')} · skladem ${mn(r.stav)}</div></td>
       <td class="num"><input type="text" inputmode="decimal" data-a="q" value="${mn(r.mnozstvi)}" style="text-align:right"></td>
       <td class="num"><input type="text" inputmode="decimal" data-a="c" value="${r.nakupni_cena == null ? '' : cislo2(r.nakupni_cena)}" style="text-align:right"></td>
       <td class="num">${r.cena == null ? '<span class="mut2">—</span>' : `<input type="text" inputmode="decimal" data-a="p" value="${cislo2(r.prodejni_cena ?? r.cena)}" style="text-align:right;${r.prodejni_cena != null && r.prodejni_cena !== r.cena ? 'border-color:var(--varovani)' : ''}" title="Prodejní cena s DPH – změna se uloží do katalogu">
@@ -902,6 +987,7 @@ function skladPrijem() {
       const pc = $('[data-a=p]', tr);
       if (pc) pc.onchange = (e) => { const c = parseKc(e.target.value); r.prodejni_cena = Number.isFinite(c) && c !== r.cena ? c : null; uloz(); vykresli(); };
       $('[data-a=x]', tr).onclick = () => { P.polozky.splice(+tr.dataset.i, 1); uloz(); vykresli(); };
+      $('[data-a=karta]', tr).onclick = () => kartaZbozi(P.polozky[+tr.dataset.i].zbozi_id);
     });
   };
   const pridej = (z, q) => {
@@ -1119,11 +1205,12 @@ function skladPohyby() {
     let rows;
     try { rows = await api('GET', `/api/sklad/pohyby?od=${$('#po-od').value}&do=${$('#po-do').value}&typ=${$('#po-typ').value}&q=${encodeURIComponent($('#po-q').value.trim())}`); } catch (e) { return chyba(e); }
     $('#po-seznam').innerHTML = rows.length ? `<table class="tab"><thead><tr><th>Kdy</th><th>Zboží</th><th>Typ</th><th>Doklad</th><th class="num">Změna</th><th class="num">Stav po</th><th>Kdo</th></tr></thead><tbody>
-      ${rows.map((p) => { const [t, n] = TYPY_POHYBU[p.typ] || ['sedy', p.typ]; return `<tr><td>${datumCas(p.cas)}</td><td><strong>${esc(p.nazev)}</strong></td><td><span class="stitek ${t}">${n}</span></td>
+      ${rows.map((p) => { const [t, n] = TYPY_POHYBU[p.typ] || ['sedy', p.typ]; return `<tr><td>${datumCas(p.cas)}</td><td><strong class="odkaz" data-karta="${p.zbozi_id}">${esc(p.nazev)}</strong></td><td><span class="stitek ${t}">${n}</span></td>
         <td class="mono">${esc(p.doklad || '')}${p.poznamka ? ` <span class="mut2">${esc(p.poznamka)}</span>` : ''}</td>
         <td class="num" style="color:${p.mnozstvi < 0 ? 'var(--chyba)' : 'var(--ok)'};font-weight:700">${p.mnozstvi > 0 ? '+' : ''}${mn(p.mnozstvi)}</td><td class="num">${mn(p.stav_po)} ${esc(p.jednotka || '')}</td><td>${esc(p.uzivatel || '')}</td></tr>`; }).join('')}</tbody></table>
       ${rows.length >= 500 ? '<div class="prazdno">Zobrazeno posledních 500 pohybů, zužte období nebo hledání.</div>' : ''}`
       : '<div class="prazdno">Žádné pohyby</div>';
+    $$('#po-seznam [data-karta]').forEach((b) => { b.onclick = () => kartaZbozi(+b.dataset.karta); });
   };
   ['po-od', 'po-do', 'po-typ'].forEach((k) => { $('#' + k).onchange = nacti; });
   $('#po-q').oninput = () => { clearTimeout(casovac); casovac = setTimeout(nacti, 200); };
